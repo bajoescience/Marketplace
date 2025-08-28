@@ -4,7 +4,7 @@ The Marketplace is a decentralized operating system that co-ordinates and econom
 
 **This project is built upon the ideas presented in the Whitepaper: see whitepaper.pdf**
 
-## Interest
+### Interest
 
 **After reading the whitepaper, if you are interested in contributing or critiquing the project, you can join our community and introduce yourself:**
 
