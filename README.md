@@ -6,7 +6,7 @@ The Marketplace is a decentralized operating system that co-ordinates and econom
 
 ## Architecture
 
-**First, we want to build the core protocol, which includes:**
+**First, we build the core protocol, which includes:**
 
 - Messaging and Time-stamping System
 - Mempool Operations
@@ -15,7 +15,7 @@ The Marketplace is a decentralized operating system that co-ordinates and econom
 
 ## Design Goals
 
-- The core protocol exists in kernel space, so we want it to be as secure as possible.
+- The core protocol exists in kernel space, so it should be as secure as possible.
 - It should be fast, as it's analogous to the context switch of a kernel despite being a protocol. The more time is used during protocol execution (mempool operations, messaging, ...), the less useful work is done.
 - It should be as small and simple as possible, only necessary functionalities should be in the core/kernel.
 
