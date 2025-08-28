@@ -15,7 +15,7 @@ or contact me at <afiliateejoseph@gmail.com>
 
 ## Architecture
 
-**First, we build the core protocol, which includes:**
+**Initially, we build the core protocol, which includes:**
 
 - Messaging and Time-stamping System
 - Mempool Operations
