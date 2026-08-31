@@ -1,12 +1,3 @@
 [workspace]
 resolver = "3"
 members = ["marketplace_core","marketplace_helpers", "marketplace_ledger", "marketplace_p2p", "marketplace_primitives", "marketplace_wallet", "marketplace_worker"]
-
-[package]
-name = "Marketplace_DLT"
-license = "MIT"
-version = "0.1.0"
-description = "A permissionless peer-to-peer network where nodes execute compute bound tasks to earn money."
-edition = "2026"
-repository = "https://github.com/bajoescience/Marketplace.git"
-readme = "README.md"

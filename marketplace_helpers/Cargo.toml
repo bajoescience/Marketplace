@@ -2,6 +2,8 @@
 name = "marketplace_helpers"
 version = "0.1.0"
 edition = "2024"
+description = "Helper functions for the Marketplace DLT package"
+repository = "https://github.com/bajoescience/Marketplace.git"
 
 [dependencies]
 sha2 = "0.11"
