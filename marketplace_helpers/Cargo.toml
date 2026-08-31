@@ -1,0 +1,15 @@
+[package]
+name = "marketplace_helpers"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+sha2 = "0.11"
+borsh = {version = "1.6.1", features = ["derive"]}
+ed25519-dalek = {version = "2.2.0", features = ["rand_core"]}
+rand = "0.8.5"
+hex = "0.4.3"
+time = { version = "0.3", features = ["macros", "local-offset"] }
+num-format = "0.4"
+alloy-primitives = "1.6.1"
+ark-vrf = "0.5.1"

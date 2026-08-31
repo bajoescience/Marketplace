@@ -1,0 +1,9 @@
+[package]
+name = "marketplace_p2p"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+marketplace_helpers = { path = "../marketplace_helpers" }
+borsh = {version = "1.6.1", features = ["derive"]}
+hex = "0.4.3"

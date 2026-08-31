@@ -1,0 +1,12 @@
+[package]
+name = "marketplace_wallet"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+marketplace_helpers = { path = "../marketplace_helpers" }
+rand = "0.8.5"
+borsh = {version = "1.6.1", features = ["derive"]}
+vdf-rs = "0.2.0"
+schnorrkel = "0.11.5"
+sha2 = "0.11"

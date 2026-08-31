@@ -1,0 +1,14 @@
+[package]
+name = "marketplace_primitives"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+marketplace_helpers = {path = "../marketplace_helpers"}
+marketplace_wallet = {path = "../marketplace_wallet"}
+chrono = "0.4.45"
+borsh = {version = "1.6.1", features = ["derive"]}
+ed25519-dalek = {version = "2.2.0", features = ["rand_core"]}
+arrayvec = {version = "0.7.8", features = ["borsh"]}
+rs_merkle = "1.5.0"
+
