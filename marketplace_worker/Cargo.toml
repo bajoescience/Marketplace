@@ -2,5 +2,8 @@
 name = "marketplace_worker"
 version = "0.1.0"
 edition = "2024"
+description = "Worker VM implementation for the Marketplace DLT package"
+repository = "https://github.com/bajoescience/Marketplace.git"
+license = "MIT"
 
 [dependencies]
