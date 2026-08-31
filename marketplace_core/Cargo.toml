@@ -4,14 +4,15 @@ version = "0.1.0"
 edition = "2024"
 description = "A permissionless peer-to-peer network where nodes execute compute bound tasks to earn money."
 repository = "https://github.com/bajoescience/Marketplace.git"
+license = "MIT"
 
 [dependencies]
-marketplace_helpers = { path = "../marketplace_helpers" }
-marketplace_p2p = { path = "../marketplace_p2p" }
-marketplace_wallet = { path = "../marketplace_wallet" }
-marketplace_primitives = { path = "../marketplace_primitives" }
-marketplace_ledger = { path = "../marketplace_ledger" }
-marketplace_worker = { path = "../marketplace_worker" }
+marketplace_helpers = { path = "../marketplace_helpers", version = "0.1.0" }
+marketplace_p2p = { path = "../marketplace_p2p", version = "0.1.0" }
+marketplace_wallet = { path = "../marketplace_wallet", version = "0.1.0" }
+marketplace_primitives = { path = "../marketplace_primitives", version = "0.1.0" }
+marketplace_ledger = { path = "../marketplace_ledger", version = "0.1.0" }
+marketplace_worker = { path = "../marketplace_worker", version = "0.1.0" }
 tokio = { version = "1", features = ["full"] }
 futures = "0.3.32"
 
