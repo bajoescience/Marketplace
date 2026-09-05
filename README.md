@@ -1,6 +1,4 @@
-<img src="Goldcoin_img.png" width="100" height="100">
-
-## Marketplace
+## Marketplace <img src="Goldcoin_img.png" width="100" height="100">
 
 The Marketplace is a decentralized operating system that co-ordinates and economizes execution of computational work across a peer-to-peer network.
 
