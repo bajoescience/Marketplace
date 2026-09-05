@@ -78,7 +78,7 @@ throughout the marketplace project.
 
 **After reading the whitepaper, if you are interested in contributing or critiquing the project, you can join our community and introduce yourself:**
 
-Discord: https://discord.gg/r9Dtwtrh
+Discord: https://discord.gg/WXKPyGwyGM
 
 or contact me at <afiliateejoseph@gmail.com>
 
