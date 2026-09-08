@@ -69,8 +69,8 @@ throughout the marketplace project.
 
 ### Issues
 
-If you have encountered any bug, or have a new feature you might want to implement in mind, [please fill an issue] 
-or [start a discussion] before any PR. We would like to discuss and reach consensus on the implementation, style and correctness of the code so that we don't waste each others time.
+If you have encountered any bug, or have a new feature you might want to implement in mind, **please fill an issue** 
+or **start a discussion** before any PR. We would like to discuss and reach consensus on the implementation, style and correctness of the code so that we don't waste each others time.
 
 We really want to be focused and consider any new features carefully before committing to it, and making sure it aligns with marketplace goals.
 
