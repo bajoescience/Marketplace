@@ -1,7 +1,7 @@
 use std::vec;
 
 use borsh::{BorshDeserialize, BorshSerialize};
-use marketplace_helpers::{functions, objects::{ID, IdHash, WU}};
+use marketplace_helpers::{functions, objects::{ID, IdHash, VRF_T, WU}};
 use rs_merkle::{MerkleTree, algorithms::Sha256};
 
 use crate::{Contract, WRVote};
@@ -19,6 +19,9 @@ pub struct BlockHeader {
 
     // New average historical gdc created per block
     average: WU,
+
+    // VRF threshold
+    vrf_t: VRF_T,
 }
 
 // Associated functions
@@ -31,6 +34,10 @@ impl BlockHeader {
             prev: [0u8; 32],
             new_gdc: WU::try_from(100).unwrap() * WU::GDC(),
             average: WU::single(),
+
+            // Max 255 bit number which means a
+            // whiteroom selection probability of 1
+            vrf_t: [255; 32]
         }
     }
 
@@ -50,6 +57,13 @@ impl BlockHeader {
             prev: prev_header.id(),
             new_gdc: blk.total(),
             average: new_avg,
+
+            // Calculate new VRF threshold 
+            // as described in whitepaper.
+            vrf_t: functions::get_vrf(
+                blk.wr_avg(), 
+                prev_header.vrf_t()
+            )
         }
     }
 }
@@ -64,6 +78,11 @@ impl BlockHeader {
     // Get average
     pub fn average(&self) -> WU {
         self.average
+    }
+
+    // Get VRF threshold
+    pub fn vrf_t(&self) -> VRF_T {
+        self.vrf_t
     }
 }
 
@@ -114,6 +133,28 @@ impl Block {
 
 // Getter methods
 impl Block {
+    // Average whiteroom size of every 
+    // job contract in the block
+    pub fn wr_avg(&self) -> usize {
+        let (sum, count) = self.body
+        .iter()
+        .fold((0, 0), |(mut sum, mut count), ctr| {
+            if let Contract::JOB(jobctr) = ctr {
+                sum += jobctr.wr_len();
+
+                count += 1;
+            }
+
+            (sum, count)
+        });
+
+        // Convert average to usize
+        // The whiteroom size has a minimum size
+        // any fractional part can be safely truncated
+        // it does not change the average greatly
+        (sum / count) as usize
+    }
+
     // Total amount of new gdc coins in block
     pub fn total(&self) -> WU {
         self.body
@@ -161,4 +202,6 @@ use super::*;
         assert_eq!(block.total(), WU::default());
         assert_eq!(block.len(), 1);
     }
+
+    // TODO: Test the average whiteroom size of a block
 }

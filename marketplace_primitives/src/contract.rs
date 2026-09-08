@@ -17,7 +17,7 @@ pub use self::whiteroom::{Whiteroom, WRVote};
 
 use borsh::{BorshDeserialize, BorshSerialize};
 use marketplace_helpers::functions;
-use marketplace_helpers::objects::{AgentResult, ID, IdHash, VRF_T, WU};
+use marketplace_helpers::objects::{AgentResult, ID, IdHash, WU};
 use marketplace_wallet::{Key, Lock};
 use marketplace_wallet::crypto::Crypto;
 
@@ -80,15 +80,6 @@ impl JobContract {
     pub fn work_id(&self) -> ID {
         self.input.id()
     }
-    
-    // Get VRF threshold of Job
-    // using Blockheader
-    pub fn vrf_t(&self) -> VRF_T {
-        functions::get_vrf(
-            self.blk_hdr.average(), 
-            self.input.work_size().into()
-        )
-    }
 
     // Get whiteroom length
     pub fn wr_len(&self) -> usize {
@@ -96,7 +87,7 @@ impl JobContract {
     }
 
     // Get the blockheader ID inputed into the JobContract
-    pub fn get_input_blk_hdr(&self) -> &BlockHeader {
+    pub fn get_blk_hdr(&self) -> &BlockHeader {
         &self.blk_hdr
     }
 
@@ -178,8 +169,6 @@ impl JobContract {
         } 
 
         // Verify result WRProof
-        let vrf_t = self.vrf_t();
-
         let seed = functions::wr_seed(
             &workptr.id(), 
             result.wr_proof().pk_bytes(),
@@ -191,7 +180,7 @@ impl JobContract {
 
         let vrf_result = Crypto::wr_prove(result.wr_proof(), &seed, diff)?;
 
-        if vrf_result > vrf_t {
+        if vrf_result > self.get_blk_hdr().vrf_t() {
             return Err(format!(
                 "Error: Invalid Whiteroom Member"
             ))
@@ -305,7 +294,7 @@ impl Verify for TxContract {
 mod tests {
     use std::{assert_eq, thread, vec};
 
-use marketplace_helpers::{functions::{dum_bytes, vdf_difficulty, wr_seed}, objects::{IdHash, WU, WorkSize, WHITEROOM_MAX}};
+use marketplace_helpers::{functions::{dum_bytes, vdf_difficulty, wr_seed}, objects::{IdHash, WU, WorkSize, WHITEROOM_SIZE}};
 use marketplace_wallet::{Owner, crypto::Crypto};
 
 use crate::contract::{result::ResultInfo};
@@ -422,7 +411,7 @@ use super::*;
         let mut handles = Vec::new();
 
         // Assemble Whiteroom max results
-        for _ in 0..WHITEROOM_MAX {
+        for _ in 0..WHITEROOM_SIZE {
             handles.push(thread::spawn(move || {
                 let wr_owner = Owner::new_sig();
 
@@ -442,12 +431,12 @@ use super::*;
         }
 
         // Total amount should be whiteroom max size
-        assert_eq!(ctr.output.len(), WHITEROOM_MAX);
+        assert_eq!(ctr.output.len(), WHITEROOM_SIZE);
 
         // Total gdc added to the system through block
         assert_eq!(
             ctr.new_gdc(), 
-            WU::try_from((WHITEROOM_MAX as u128 - 1) * 10000).unwrap()
+            WU::try_from((WHITEROOM_SIZE as u128 - 1) * 10000).unwrap()
         );
 
         // Contract should be validated and verified
