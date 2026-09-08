@@ -2,7 +2,9 @@ use std::{collections::{HashMap}, format};
 
 use arrayvec::ArrayVec;
 use borsh::{BorshDeserialize, BorshSerialize};
-use marketplace_helpers::{functions, objects::{AgentResult, ID, WHITEROOM_MAX}};
+use marketplace_helpers::{functions::{self, whiteroom_max_size}, objects::{AgentResult, ID, WHITEROOM_SIZE}};
+
+const WHITEROOM_MAX: usize = whiteroom_max_size();
 
 // Consensus trait to prove what it means 
 // for a whiteroom to agree
@@ -62,7 +64,7 @@ where
     pub fn is_consensus(&self) -> bool {
         // Check if winning vote has greater count than threshold
         if let Some(winner) = self.winning_vote() {
-            if *winner.1 >= functions::bft_thresh(WHITEROOM_MAX) {
+            if *winner.1 >= functions::whiteroom_threshold() {
                 return true;
             }
         }
@@ -74,7 +76,7 @@ where
     pub fn can_consensus(&self) -> bool {
         // Whiteroom can only reach consensus when less than 2
         // results reach effective threshold
-        let effective_thresh = WHITEROOM_MAX - functions::bft_thresh(WHITEROOM_MAX);
+        let effective_thresh = WHITEROOM_SIZE - functions::whiteroom_threshold();
 
         let count = self.votes
             .iter()

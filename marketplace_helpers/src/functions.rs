@@ -3,7 +3,7 @@ use std::{todo};
 use sha2::{Sha256, Digest};
 use time::OffsetDateTime;
 
-use crate::objects::{ID, MIN_WORK_SIZE, VRF_T, WU, WHITEROOM_MAX, VDF_CONSTANT};
+use crate::objects::{ID, MIN_WORK_SIZE, VDF_CONSTANT, VRF_T, WHITEROOM_SIZE, WU};
 use alloy_primitives::{U256};
 
 /// BFT whiteroom size given f amounts of tolerable faulty nodes
@@ -18,6 +18,23 @@ pub fn bft_thresh(m: usize) -> usize {
     (2 * f) + 1
 }
 
+/// BFT threshold of Expected Whiteroom Size
+pub const fn whiteroom_threshold() -> usize {
+    let f = (WHITEROOM_SIZE - 1) / 3;
+
+    (2 * f) + 1
+}
+
+/// Maximum whiteroom size given by 
+/// formula in the marketplace whitepaper.
+pub const fn whiteroom_max_size() -> usize {
+    // Get whiteroom threshold size "s"
+    let s = whiteroom_threshold();
+
+    // Return max size (see whitepaper)
+    (2 * s) - 1
+}
+
 // Get vdf size by multiplying 
 // the result of work_size divided by 10000 and
 // the result of vrf threshold divided by 2 to 256 power.
@@ -25,7 +42,7 @@ pub fn vdf_difficulty(work_size: WU) -> u64 {
     // Divide by a value of 100000 to account for squaring work
     let work_size = work_size.inner() / VDF_CONSTANT;
 
-    let vdf_size = work_size / WHITEROOM_MAX as u128;
+    let vdf_size = work_size / WHITEROOM_SIZE as u128;
 
     // Convert difficulty to u64
     let result = u64::try_from(vdf_size).unwrap_or(u64::MAX);
@@ -47,15 +64,26 @@ pub fn avg_wu(a: WU, b: WU) -> WU {
     }
 }
 
-// Create new VRF threshold using network average and Job work
-pub fn get_vrf(network_avg: WU, job_size: WU) -> VRF_T {
-    // Max VRF which is also the network initial VRF
-    let vrf = U256::from_be_bytes([255u8; 32]);
+/// Get new VRF threshold using whiteroom average and
+/// previous VRF threshold as described in the marketplace 
+/// whitepaper.
+/// 
+/// wr_avg: Average Whiteroom size in a block 
+/// referenced by the block header
+/// 
+/// prev_vrf: Previous VRF threshold indicating Whiteroom
+/// Selction Probability.
+pub fn get_vrf(wr_avg_size: usize, prev_vrf: VRF_T) -> VRF_T {
+    // Previous VRF threshold and whiteroom average
+    // in 256 bit integer form
+    let vrf = U256::from_be_bytes(prev_vrf);
 
-    let network_avg = U256::from(network_avg.inner());
-    let job_size = U256::from(job_size.inner());
+    let whiteroom_avg_size = U256::from(wr_avg_size);
 
-    ((vrf / network_avg).saturating_mul(job_size)).to_be_bytes()
+    // Expected Whiteroom size in 256 bit integer form.
+    let expected_wr_size = U256::from(WHITEROOM_SIZE);
+
+    ((vrf / whiteroom_avg_size).saturating_mul(expected_wr_size)).to_be_bytes()
 }
 
 // Convert a hex_string to bytes
@@ -130,9 +158,37 @@ pub fn timestamp() -> u64 {
 mod tests {
     use std::{assert_eq, error::Error};
 
-use crate::objects::WU;
+    use crate::objects::WU;
 
-use super::*;
+    use super::*;
+
+    // Test new VRF threshold formula
+    #[test]
+    fn test_vrf_threshold() {
+        // VRF from previous epoch
+        let old_vrf = [255u8; 32];
+
+        // Average whiteroom size of last epoch
+        let avg_wr_size = whiteroom_max_size();
+
+        let new_vrf = get_vrf(avg_wr_size, old_vrf);
+
+        assert_eq!(new_vrf, [204; 32]);
+    }
+
+    // Test VRF threshhold cannot overflow max 26 bit number
+    #[test]
+    fn test_vrf_threshold_overflow() {
+        // VRF from previous epoch
+        let old_vrf = [255u8; 32];
+
+        // Average whiteroom size of last epoch
+        let avg_wr_size = whiteroom_threshold();
+
+        let new_vrf = get_vrf(avg_wr_size, old_vrf);
+
+        assert_eq!(new_vrf, [255; 32]);
+    }
 
     // Test vdf difficulty
     #[test]
