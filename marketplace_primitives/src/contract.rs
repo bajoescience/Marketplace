@@ -291,7 +291,7 @@ impl Verify for TxContract {
 
 
 #[cfg(test)]
-mod tests {
+pub mod tests {
     use std::{assert_eq, thread, vec};
 
 use marketplace_helpers::{functions::{dum_bytes, vdf_difficulty, wr_seed}, objects::{IdHash, WU, WorkSize, WHITEROOM_SIZE}};
@@ -316,7 +316,7 @@ use super::*;
     }
     
     // WorkPtr
-    fn workptr(owner: &Owner, blk_hdr: ID) -> WorkPtr {
+    pub fn workptr(owner: &Owner, blk_hdr: ID) -> WorkPtr {
         let mut workptr = WorkPtr::new(
             dum_bytes(), 
             work_pay().1,
@@ -337,7 +337,7 @@ use super::*;
     }
 
     // ResultPtr
-    fn resultptr(work_id: ID, wr_owner: &Owner) -> ResultPtr {
+    pub fn resultptr(work_id: ID, wr_owner: &Owner) -> ResultPtr {
         // Get whiteroom proof
         let wr_proof = Crypto::new(&wr_owner)
             .attempt_wr(

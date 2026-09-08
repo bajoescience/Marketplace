@@ -6,8 +6,8 @@ use num_format::{Locale, ToFormattedString};
 
 use super::functions;
 
-// Max whiteroom Size
-pub const WHITEROOM_MAX: usize = (3 * 1) + 1;
+/// Expected whiteroom Size
+pub const WHITEROOM_SIZE: usize = (3 * 1) + 1;
 
 // VDF constant
 pub const VDF_CONSTANT: u128 = 100000;

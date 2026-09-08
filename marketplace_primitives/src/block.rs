@@ -1,7 +1,7 @@
 use std::vec;
 
 use borsh::{BorshDeserialize, BorshSerialize};
-use marketplace_helpers::{functions, objects::{ID, IdHash, VRF_T, WU}};
+use marketplace_helpers::{functions, objects::{ID, IdHash, VRF_T, WHITEROOM_SIZE, WU}};
 use rs_merkle::{MerkleTree, algorithms::Sha256};
 
 use crate::{Contract, WRVote};
@@ -148,6 +148,15 @@ impl Block {
             (sum, count)
         });
 
+        // For an empty block, the average whiteroom
+        // size is reported as WHITEROOM SIZE / 2
+        // even though this is not true.
+        // this is to slash the VRF threshold by half
+        // which is the most a VRF threshold can be reduced.
+        if count == 0 {
+            return WHITEROOM_SIZE / 2
+        }
+
         // Convert average to usize
         // The whiteroom size has a minimum size
         // any fractional part can be safely truncated
@@ -190,9 +199,53 @@ impl Block {
 
 #[cfg(test)]
 mod tests {
-    use std::assert_eq;
+    use std::{assert_eq, thread};
+    use marketplace_helpers::objects::{AgentResult, WHITEROOM_SIZE};
+use marketplace_wallet::Owner;
 
-use super::*;
+use crate::JobContract;
+    use crate::contract::tests::{resultptr, workptr};
+    use super::*;
+
+    // Valid Job contract
+    pub fn jobctr() -> AgentResult<JobContract> {
+        let owner = Owner::new_sig();
+
+        // Input Block header
+        let blk_hdr = BlockHeader::genesis();
+
+        // Initialize valid Work Ptr
+        let mut workptr = workptr(&owner, blk_hdr.id());
+        let mut jobctr = JobContract::new(workptr, blk_hdr);
+
+        // Initialize size result pointers
+        // ResultPtr Initializers
+        let work_id = jobctr.input().id();
+
+        let mut handles = Vec::new();
+
+        // Assemble Whiteroom results
+        for _ in 0..WHITEROOM_SIZE {
+            handles.push(thread::spawn(move || {
+                let wr_owner = Owner::new_sig();
+
+                // Result
+                let result_ptr = resultptr(
+                    work_id,
+                    &wr_owner
+                );
+
+                result_ptr
+            })); 
+        }
+
+        for handle in handles {
+            let result_ptr = handle.join().unwrap();
+            jobctr.add_result(result_ptr)?;
+        }
+
+        Ok(jobctr)
+    }
 
     // Valid block
     #[test]
@@ -203,5 +256,24 @@ use super::*;
         assert_eq!(block.len(), 1);
     }
 
-    // TODO: Test the average whiteroom size of a block
+    // Test whiteroom size of an empty block is 
+    // set to half of the expected whiteroom size
+    #[test]
+    fn avg_wr_size_of_empty_block() {
+        let block = Block::new(Vec::new());
+
+        assert_eq!(block.wr_avg(), WHITEROOM_SIZE / 2)
+    }
+
+
+    // Test the average whiteroom size of a block
+    #[test]
+    fn avg_wr_size_of_block() -> AgentResult<()> {
+        let block = Block::new(
+            vec![Contract::JOB(jobctr()?), Contract::JOB(jobctr()?), Contract::JOB(jobctr()?)]
+        );
+
+        assert_eq!(block.wr_avg(), WHITEROOM_SIZE);
+        Ok(())
+    }
 }
