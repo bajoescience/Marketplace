@@ -4,7 +4,6 @@ use borsh::{BorshDeserialize, BorshSerialize};
 use marketplace_helpers::{functions, objects::{AgentResult, ID}};
 use vdf_rs::{VDF, VDFParams, WesolowskiVDF, WesolowskiVDFParams};
 use crate::{Owner};
-use sha2::{Digest, Sha256};
 
 use schnorrkel::{ Keypair, PublicKey, vrf::{VRF_PREOUT_LENGTH, VRF_PROOF_LENGTH, VRFPreOut, VRFProof}};
 
@@ -218,9 +217,11 @@ use marketplace_helpers::{functions::{self, dum_bytes}, objects::WU};
 
         // Other parameters to verify with.
         let work_id = dum_bytes();
+        let vrf_t = [2u8; 32];
 
         let diff = functions::vdf_difficulty(
-            WU::try_from(300000000).unwrap()
+            WU::try_from(300000000).unwrap(),
+            vrf_t
         );
 
         // Attempt whiteroom membership
@@ -249,9 +250,11 @@ use marketplace_helpers::{functions::{self, dum_bytes}, objects::WU};
         let crypto = Crypto::new(&owner);
 
         let work_id = dum_bytes();
+        let vrf_t = [2u8; 32];
 
         let vdf_diff = functions::vdf_difficulty(
-            WU::try_from(3000000000).unwrap()
+            WU::try_from(3000000000).unwrap(),
+            vrf_t
         );
 
         let proof = crypto.solve_vdf(&work_id, vdf_diff)?;
