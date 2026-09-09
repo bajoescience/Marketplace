@@ -4,7 +4,7 @@ use sha2::{Sha256, Digest};
 use time::OffsetDateTime;
 
 use crate::objects::{ID, MIN_WORK_SIZE, VDF_CONSTANT, VRF_T, WHITEROOM_SIZE, WU};
-use alloy_primitives::{U256};
+use alloy_primitives::{U256, U512};
 
 /// BFT whiteroom size given f amounts of tolerable faulty nodes
 pub fn bft_from(f: usize) -> usize {
@@ -38,17 +38,29 @@ pub const fn whiteroom_max_size() -> usize {
 // Get vdf size by multiplying 
 // the result of work_size divided by 10000 and
 // the result of vrf threshold divided by 2 to 256 power.
-pub fn vdf_difficulty(work_size: WU) -> u64 {
-    // Divide by a value of 100000 to account for squaring work
+pub fn vdf_difficulty(work_size: WU, vrf_threshold: VRF_T) -> u64 {
+    // Divide by a value of 100000 to account for
+    // difference between one cpu cycle and one VDF squaring
     let work_size = work_size.inner() / VDF_CONSTANT;
 
-    let vdf_size = work_size / WHITEROOM_SIZE as u128;
+    // Convert VRF threshold from bytes to integer
+    let vrf_t = U256::from_be_bytes(vrf_threshold);
 
-    // Convert difficulty to u64
-    let result = u64::try_from(vdf_size).unwrap_or(u64::MAX);
+    // Invested Power (see whitepaper Page 5)
+    let ip = work_size / WHITEROOM_SIZE as u128;
+
+    // Multiply VRF threshold by Invested power, then divide by 
+    // max 256 bit number and get final VDF difficulty in u64
+    let result = U512::from(vrf_t) * U512::from(ip);
+
+    let bytes = result.to_be_bytes::<64>();
+
+    let vdf_diff = u128::from_be_bytes(bytes[16..32].try_into().unwrap());
+
+    let diff = u64::try_from(vdf_diff).unwrap_or(u64::MAX);
 
     // The absolute minimum difficulty is 1
-    std::cmp::max(result, 1)
+    std::cmp::max(diff, 1)
 
 }
 
@@ -66,7 +78,7 @@ pub fn avg_wu(a: WU, b: WU) -> WU {
 
 /// Get new VRF threshold using whiteroom average and
 /// previous VRF threshold as described in the marketplace 
-/// whitepaper.
+/// whitepaper (Page 4).
 /// 
 /// wr_avg: Average Whiteroom size in a block 
 /// referenced by the block header
@@ -195,9 +207,9 @@ mod tests {
     fn test_vdf_diff() {
         let work_size = WU::try_from(3000000000).unwrap();
 
-        let vdf_diff = vdf_difficulty(work_size);
+        let vdf_diff = vdf_difficulty(work_size, [255u8; 32]);
 
-        assert_eq!(vdf_diff, 7500);
+        assert_eq!(vdf_diff, 7499);
     }
 
     // Test converting a hex string to bytes

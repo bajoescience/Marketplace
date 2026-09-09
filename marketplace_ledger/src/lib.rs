@@ -62,10 +62,10 @@ impl<T: State> Blockchain<T> {
             Contract::TX(txctr) => txctr.verify(),
             Contract::JOB(jobctr) => {
                 // Get block header referenced by contract
-                let Some(_) = self.find_hdr(&jobctr.get_input_blk_hdr().id()) else {
+                let Some(_) = self.find_hdr(&jobctr.get_blk_hdr().id()) else {
                 return Err(format!(
                     "Error: Block Header {} does not exist in Blockchain",
-                        functions::from_bytes(&jobctr.get_input_blk_hdr().id()) 
+                        functions::from_bytes(&jobctr.get_blk_hdr().id()) 
                     ))
                 };
 
