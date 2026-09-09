@@ -210,17 +210,18 @@ impl WRVote for ResultPtr {
 mod tests {
     use std::{assert_eq};
 
-use marketplace_helpers::{functions::dum_bytes, objects::WU};
+use marketplace_helpers::{functions::dum_bytes, objects::{VRF_T, WU}};
 use marketplace_wallet::{Owner, crypto::Crypto};
 
 use super::*;
 
-    pub fn wr_proof(owner: &Owner) -> WRProof {
+    pub fn wr_proof(owner: &Owner, vrf_t: VRF_T) -> WRProof {
         let crypto = Crypto::new(owner);
         crypto.attempt_wr(
             &dum_bytes(), 
             functions::vdf_difficulty(
-                WU::try_from(300000).unwrap()
+                WU::try_from(300000).unwrap(),
+                vrf_t
             )
         ).unwrap()
     }
@@ -250,7 +251,7 @@ use super::*;
 
         // Prove ownership of two whiteroom inputs using VDF + VRF
         // and build res_ptr
-        let wr_proof = wr_proof(&owner);
+        let wr_proof = wr_proof(&owner, [2; 32]);
         let mut resptr = res_ptr(
             WorkSize::build(spent).unwrap(), 
             &owner, 
@@ -278,7 +279,7 @@ use super::*;
         // Prove ownership of two whiteroom inputs using VDF + VRF
         // and build res_ptr but 
         // build WRproof with false owner
-        let wr_proof = wr_proof(&f_owner);
+        let wr_proof = wr_proof(&f_owner, [2; 32]);
         let mut resptr = res_ptr(
             WorkSize::build(spent).unwrap(), 
             &wr_owner, 
@@ -301,7 +302,7 @@ use super::*;
         let owner = Owner::new_sig();
         let spent = WU::try_from(20000).unwrap();
 
-        let wr_proof = wr_proof(&owner);
+        let wr_proof = wr_proof(&owner, [2; 32]);
         let mut res_ptr = res_ptr(
             WorkSize::build(spent).unwrap(),
             &owner, 

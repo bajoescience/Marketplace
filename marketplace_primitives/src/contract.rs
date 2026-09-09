@@ -174,9 +174,9 @@ impl JobContract {
             result.wr_proof().pk_bytes(),
         );
 
-        let diff = functions::vdf_difficulty(
-            workptr.work_size().into()
-        );
+        // Get difficulty using VRF_T and total work size
+        // according to the Whitepaper (Page 4)
+        let diff = self.get_blk_hdr().vdf_diff();
 
         let vrf_result = Crypto::wr_prove(result.wr_proof(), &seed, diff)?;
 
@@ -294,7 +294,7 @@ impl Verify for TxContract {
 pub mod tests {
     use std::{assert_eq, thread, vec};
 
-use marketplace_helpers::{functions::{dum_bytes, vdf_difficulty, wr_seed}, objects::{IdHash, WU, WorkSize, WHITEROOM_SIZE}};
+use marketplace_helpers::{functions::{dum_bytes, wr_seed}, objects::{IdHash, WHITEROOM_SIZE, WU, WorkSize}};
 use marketplace_wallet::{Owner, crypto::Crypto};
 
 use crate::contract::{result::ResultInfo};
@@ -337,7 +337,7 @@ use super::*;
     }
 
     // ResultPtr
-    pub fn resultptr(work_id: ID, wr_owner: &Owner) -> ResultPtr {
+    pub fn resultptr(work_id: ID, wr_owner: &Owner, vdf_diff: u64) -> ResultPtr {
         // Get whiteroom proof
         let wr_proof = Crypto::new(&wr_owner)
             .attempt_wr(
@@ -345,9 +345,7 @@ use super::*;
                     &work_id, 
                     &wr_owner.pk()
                 ),
-                vdf_difficulty(
-                    work_pay().1.into()
-                )
+                vdf_diff
             ).unwrap();
 
         let result = ResultInfo::new(dum_bytes(), work_pay().1);
@@ -381,6 +379,7 @@ use super::*;
         let result_ptr = resultptr(
             ctr.input().id(),
             &wr_owner,
+            blk_hdr.vdf_diff()
         );
 
         let len = ctr.add_result(result_ptr)?;
@@ -418,7 +417,8 @@ use super::*;
                 // Result
                 let result_ptr = resultptr(
                     work_id,
-                    &wr_owner
+                    &wr_owner,
+                    blk_hdr.vdf_diff()
                 );
 
                 result_ptr
