@@ -70,17 +70,29 @@ impl BlockHeader {
 
 // Getter methods
 impl BlockHeader {
+    // Get VDF Difficulty for blockheader
+    pub fn vdf_diff(&self) -> u64 {
+        // Work size is total work done on a job by
+        // a whiteroom committee divided by whiteroom committee size
+        let work_size = self.average / WU::try_from(WHITEROOM_SIZE as u128).unwrap();
+
+        functions::vdf_difficulty(
+            work_size, 
+            self.vrf_t()
+        )
+    }
+
     // Get amount of new gdc in block
     pub fn new_gdc(&self) -> WU {
         self.new_gdc
     }
 
-    // Get average
+    // Get average 
     pub fn average(&self) -> WU {
         self.average
     }
 
-    // Get VRF threshold
+    // Get VRF threshold for current epoch
     pub fn vrf_t(&self) -> VRF_T {
         self.vrf_t
     }
@@ -215,7 +227,7 @@ use crate::JobContract;
         let blk_hdr = BlockHeader::genesis();
 
         // Initialize valid Work Ptr
-        let mut workptr = workptr(&owner, blk_hdr.id());
+        let workptr = workptr(&owner, blk_hdr.id());
         let mut jobctr = JobContract::new(workptr, blk_hdr);
 
         // Initialize size result pointers
@@ -232,7 +244,8 @@ use crate::JobContract;
                 // Result
                 let result_ptr = resultptr(
                     work_id,
-                    &wr_owner
+                    &wr_owner,
+                    blk_hdr.vdf_diff()
                 );
 
                 result_ptr
