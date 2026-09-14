@@ -138,7 +138,6 @@ pub fn wr_seed(work_ptr_id: &ID, pk: &[u8]) -> ID {
 
 // Hash a series of bytes
 pub fn hash(bytes: &[u8]) -> ID {
-    // Hash bytes with sha256 twice
     Sha3_256::digest(bytes).into()
 }
 
