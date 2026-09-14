@@ -16,3 +16,4 @@ time = { version = "0.3", features = ["macros", "local-offset"] }
 num-format = "0.4"
 alloy-primitives = "1.6.1"
 ark-vrf = "0.5.1"
+sha3 = "0.12.0"

@@ -1,6 +1,6 @@
 use std::{todo};
 
-use sha2::{Sha256, Digest};
+use sha3::{Digest, Sha3_256};
 use time::OffsetDateTime;
 
 use crate::objects::{ID, MIN_WORK_SIZE, VDF_CONSTANT, VRF_T, WHITEROOM_SIZE, WU};
@@ -129,7 +129,7 @@ pub fn casual_fee_price(amount: WU) -> WU {
 
 // Get a Whiteroom seed using hash of work_ptr_id and pub key
 pub fn wr_seed(work_ptr_id: &ID, pk: &[u8]) -> ID {
-    let mut hasher = Sha256::new();
+    let mut hasher = Sha3_256::new();
     hasher.update(pk);
     hasher.update(work_ptr_id);
 
@@ -138,8 +138,7 @@ pub fn wr_seed(work_ptr_id: &ID, pk: &[u8]) -> ID {
 
 // Hash a series of bytes
 pub fn hash(bytes: &[u8]) -> ID {
-    // Hash bytes with sha256 twice
-    Sha256::digest(Sha256::digest(bytes)).into()
+    Sha3_256::digest(bytes).into()
 }
 
 // Dummy bytes for tests and placeholders
