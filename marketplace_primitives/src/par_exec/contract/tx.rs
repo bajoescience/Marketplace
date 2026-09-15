@@ -7,8 +7,8 @@ use marketplace_wallet::{Key, Lock};
 
 use crate::{Tx, Verify};
 
-#[derive(BorshSerialize, BorshDeserialize, Debug, Clone)]
 // Contract type for casual transaction
+#[derive(BorshSerialize, BorshDeserialize, Debug, Clone)]
 pub struct TxContract {
     bill: Vec<Tx>,
 
