@@ -1,10 +1,14 @@
-mod contract;
 mod block;
 
-pub use self::contract::{
+// Parallel Execution
+mod par_exec;
+
+pub use self::par_exec::{
     Tx, Contract, TxIO, TxIdentifier, Whiteroom, 
-    WRVote, WorkPtr, ResultPtr, JobContract, TxContract
+    WRVote, WorkPtr, ResultPtr, JobContract, TxContract,
+    ExecuteTime, ResultInfo
 };
+
 pub use self::block::{Block, BlockHeader};
 
 use marketplace_helpers as helpers;

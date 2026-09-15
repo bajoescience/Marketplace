@@ -112,13 +112,13 @@ impl Tx {
         // Only winning whiteroom members receive the pay
         let mut opts = Vec::new();
 
-        // Initalize amount spent using worksie
+        // Initalize amount spent using worksize
         let mut spent = work_size;
         let mut fees = WU::default();
 
         // New money is printed to send to all Whiteroom
         // winning witnesses
-        for witness in ctr.output.winners() {
+        for witness in ctr.output().winners() {
             spent = witness.result().spent().into();
             let fee = fee_price(spent);
 
