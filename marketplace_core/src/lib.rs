@@ -175,7 +175,7 @@ impl<T: State, W: Worker> Core<T, W> {
         let ctr = Contract::JOB(jobctr);
 
         // Update asset state using contract
-        self.state.try_sub(&ctr)?;
+        self.state.try_sub_ctr(&ctr)?;
 
         // Handover job contract to mempool to handle
         self.mempool.add_job(ctr);
@@ -201,7 +201,7 @@ impl<T: State, W: Worker> Core<T, W> {
             let ctr = self.mempool.take_job(witness.work_id())
                 .expect("Illegal: Contract should still exist");
 
-            self.state.revert_sub(&ctr);
+            self.state.revert_sub_ctr(&ctr);
         }
 
         Ok(())

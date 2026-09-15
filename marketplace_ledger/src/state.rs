@@ -4,11 +4,11 @@
 //! storing, and updating 
 //! UTXO state
 
-use std::{collections::{HashMap}, format};
+use std::{collections::HashMap, format, todo};
 
 use marketplace_helpers::{functions, objects::{AgentResult, ID, IdHash, WU}};
 use marketplace_wallet::Lock;
-use marketplace_primitives::{Tx, TxIO, TxIdentifier};
+use marketplace_primitives::{Contract, Tx, TxIO, TxIdentifier};
 
 /// State trait defines a set of methods that allows the use 
 /// of a custom Data Structure to handle the balance sheet of 
@@ -19,10 +19,10 @@ pub trait State: Clone {
     /// Substracting the amount in a TxIO from the owner's balance as a Tx input,
     /// 
     /// Return any double spend error and roll back changes.
-    fn try_update_ipt(&mut self, tx: &Tx) -> AgentResult<()>;
+    fn try_sub_ipt(&mut self, tx: &Tx) -> AgentResult<()>;
 
     // Revert tx inputs if anything goes wrong
-    fn revert_ipt(&mut self, tx: &Tx);
+    fn revert_sub_ipt(&mut self, tx: &Tx);
 
     /// Update opt
     /// by adding the tx output TxIO to state
@@ -33,22 +33,62 @@ pub trait State: Clone {
     /// this method to panic
     fn revert_opt(&mut self, tx: &Tx) -> AgentResult<()>;
 
+    /// Update state by subtracting inputs from the 
+    /// `Contract`
+    /// 
+    /// If error occurs because of double spends, the error is returned
+    fn try_sub_ctr(&mut self, ctr: &Contract) -> AgentResult<()> {
+        match ctr {
+            Contract::JOB(jobctr) => self.try_sub_ipt(&jobctr.get_tx()),
+            Contract::TX(txctr) => {
+                todo!()
+            }
+        }
+    }
+
+    /// Revert state by adding removed inputs from `Contract` back.
+    /// 
+    /// The input is first checked, and if the input exists, the 
+    /// function registers an error and `panics` assuming a corrupted state.
+    fn revert_sub_ctr(&mut self, ctr: &Contract);
+
+    /// Update state by adding outputs from a `Contract`
+    fn add_ctr(&mut self, ctr: &Contract);
+
+    /// Revert state by removing added outputs.
+    /// 
+    /// If any output does not already exist when trying to remove it, an
+    /// error is registered, and the function `panics` assuming a corrupted state.
+    fn revert_add_ctr(&mut self, ctr: &Contract);
+
     /// Update by subtracting Tx ipts,
     /// and adding Tx opts
-    fn try_update(&mut self, tx: &Tx) -> AgentResult<()> {
-        self.try_update_ipt(tx)?;
+    fn try_update_ctr(&mut self, ctr: &Contract) -> AgentResult<()> {
+        self.try_sub_ctr(ctr)?;
 
-        self.update_opt(tx);
+        self.add_ctr(ctr);
 
         Ok(())
     }
 
-    /// Revert by adding Tx ipts,
-    /// and subtracting Tx opts
-    fn revert(&mut self, tx: &Tx) -> AgentResult<()> {
-        self.revert_ipt(tx);
+    /// Update by subtracting Tx ipts,
+    /// and adding Tx opts
+    fn try_update(&mut self, ctr: &Contract) -> AgentResult<()> {
+        self.try_sub_ctr(ctr)?;
 
-        self.revert_opt(tx)
+        self.add_ctr(ctr);
+
+        Ok(())
+    }
+
+    /// Revert by removing Contract ipts,
+    /// and adding Contract opts
+    fn revert(&mut self, ctr: &Contract) -> AgentResult<()> {
+        self.revert_add_ctr(ctr);
+
+        self.revert_sub_ctr(ctr);
+
+        Ok(())
     }
 
     /// Get owner's a lock goldcoin balance.
@@ -188,7 +228,7 @@ impl DefaultState {
 
 impl State for DefaultState {
     // Attempt to remove
-    fn try_update_ipt(&mut self, tx: &Tx) -> AgentResult<()> {
+    fn try_sub_ipt(&mut self, tx: &Tx) -> AgentResult<()> {
         let balances = self.get_balances(tx)?;
 
         // Keep track of used TxIO
@@ -214,7 +254,7 @@ impl State for DefaultState {
     }
 
     // Revert input given any error
-    fn revert_ipt(&mut self, tx: &Tx) {
+    fn revert_sub_ipt(&mut self, tx: &Tx) {
         let balances = self.get_balances(tx)
             .expect("Illegal: Token should exist, but not found");
 
