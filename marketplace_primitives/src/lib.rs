@@ -1,4 +1,4 @@
-mod block;
+mod sync_final;
 
 // Parallel Execution
 mod par_exec;
@@ -9,7 +9,7 @@ pub use self::par_exec::{
     ExecuteTime, ResultInfo
 };
 
-pub use self::block::{Block, BlockHeader};
+pub use self::sync_final::{Block, BlockHeader};
 
 use marketplace_helpers as helpers;
 use marketplace_wallet as wallet;

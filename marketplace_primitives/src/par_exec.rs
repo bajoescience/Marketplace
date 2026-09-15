@@ -1,10 +1,10 @@
-//! ## Synchronous Finalization
+//! ## Parallel Execution
 
-mod work;
-mod whiteroom;
-mod result;
-mod contract;
-mod tx;
+pub mod work;
+pub mod whiteroom;
+pub mod result;
+pub mod contract;
+pub mod tx;
 
 
 pub use self::work::{WorkPtr, ExecuteTime};

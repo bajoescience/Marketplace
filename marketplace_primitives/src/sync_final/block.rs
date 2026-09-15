@@ -216,7 +216,7 @@ mod tests {
 use marketplace_wallet::Owner;
 
 use crate::JobContract;
-    use crate::contract::tests::{resultptr, workptr};
+    use crate::par_exec::contract::job::tests::{resultptr, workptr};
     use super::*;
 
     // Valid Job contract

@@ -1,5 +1,5 @@
-mod job;
-mod tx;
+pub mod job;
+pub mod tx;
 
 pub use self::job::JobContract;
 pub use self::tx::TxContract;
