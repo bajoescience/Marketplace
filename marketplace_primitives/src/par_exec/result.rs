@@ -209,11 +209,9 @@ impl WRVote for ResultPtr {
 #[cfg(test)]
 mod tests {
     use std::{assert_eq};
-
-use marketplace_helpers::{functions::dum_bytes, objects::{VRF_T, WU}};
-use marketplace_wallet::{Owner, crypto::Crypto};
-
-use super::*;
+    use marketplace_helpers::{functions::dum_bytes, objects::{VRF_T, WU}};
+    use marketplace_wallet::{Owner, crypto::Crypto};
+    use super::*;
 
     pub fn wr_proof(owner: &Owner, vrf_t: VRF_T) -> WRProof {
         let crypto = Crypto::new(owner);
@@ -226,7 +224,7 @@ use super::*;
         ).unwrap()
     }
 
-    pub fn res_ptr(spent: WorkSize, owner: &Owner, wr_proof: WRProof) -> ResultPtr {
+    fn res_ptr(spent: WorkSize, owner: &Owner, wr_proof: WRProof) -> ResultPtr {
         let result = ResultInfo {
             opt_hash: dum_bytes(),
             spent,

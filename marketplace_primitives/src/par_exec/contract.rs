@@ -40,3 +40,5 @@ impl Contract {
         }
     }
 }
+
+// Tests here
