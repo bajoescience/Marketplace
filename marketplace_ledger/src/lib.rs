@@ -14,7 +14,7 @@ pub use mempool::Mempool;
 // Store list of block headers
 // The block and headers are kept in a file
 // while only the headers are kept in memory
-pub struct Blockchain<T: State> {
+pub struct Blockchain {
     // Store BlockHeader ID as key
     headers: HashMap<ID, BlockHeader>,
 
@@ -24,29 +24,24 @@ pub struct Blockchain<T: State> {
     // Total amount of gdc in existence
     total: WU,
 
-    // Store state that can be used as a checkpoint
-    state: T,
-
     blockfile: Vec<Block>,
 }
 
-impl<T: State> Blockchain<T> {
+impl Blockchain {
     /// Initialize a new Blockchain
     /// This is used in the initialization 
     /// of the Marketplace State
-    pub fn new(state: T) -> Self {
+    pub fn new() -> Self {
         // Add genesis header
         let headers = HashMap::new();
         let latest = VecDeque::with_capacity(2);
 
-        let genesis_blk = Block::genesis();
         let genesis_hdr = BlockHeader::genesis(); 
 
         let mut chain = Self { 
             headers,
             latest,
             total: genesis_hdr.new_gdc(),
-            state,
             blockfile: vec![Block::genesis()],
         };
 
@@ -86,7 +81,7 @@ impl<T: State> Blockchain<T> {
 }
 
 // Getter methods
-impl<T: State> Blockchain<T> {
+impl Blockchain {
     // Find header using ID
     pub fn find_hdr(&self, id: &ID) -> Option<&BlockHeader> {
         self.headers.get(id)   
@@ -142,15 +137,10 @@ impl<T: State> Blockchain<T> {
     pub fn total_gdc(&self) -> WU {
         self.total
     }
-
-    // Update state given to it
-    pub fn latest_state(&self) -> impl State {
-        self.state.clone()
-    }
 }
 
 // Setter methods
-impl<T: State> Blockchain<T> {
+impl Blockchain {
     // Add to file
     fn add_to_file(&self, block: Block) -> AgentResult<()> {
         let bytes = block.serialize();
@@ -183,64 +173,6 @@ impl<T: State> Blockchain<T> {
         self.headers.insert(hdr.id(), hdr);
     }
 
-    // Update State using tx in a block
-    // If error, revert registered changes
-    fn update_state_with_ctr(&mut self, ctr: &Contract) -> AgentResult<()> {
-        match ctr {
-                Contract::JOB(jobctr) => {
-                    let tx = jobctr.get_tx();
-
-                    match self.state.try_update(&tx) {
-                        Ok(_) => Ok(()),
-                        Err(e) => {
-                            self.state.revert(&tx)
-                                .expect("Error reverting Tx");
-
-                            Err(e)
-                        }
-                    }?;
-                },
-                Contract::TX(txctr) => {
-                    let mut txs = Vec::new();
-
-                    for tx in txctr.get_tx() {
-                        match self.state.try_update(tx) {
-                            Ok(_) => txs.push(tx),
-                            Err(e) => {
-                                // Roll back all txs
-                                for tx in txs {
-                                    self.state.revert(&tx)
-                                        .expect("Error reverting Tx");
-                                }
-
-                                return Err(e);
-                            }
-                        };
-                    }
-                },
-            }
-
-        Ok(())
-    }
-
-    // Reverse state with contract
-    // Any errors encountered during reverting is
-    // an anomaly, and the program should panic
-    fn revert_state_with_ctr(&mut self, ctr: &Contract) {
-        match ctr {
-            Contract::JOB(jobctr) => {
-                self.state.revert(&jobctr.get_tx())
-                    .expect("Error reverting Tx");
-            },
-            Contract::TX(txctr) => {
-                for tx in txctr.get_tx() {
-                    self.state.revert(tx)
-                        .expect("Error reverting Tx");
-                }
-            }
-        }
-    }
-
     /// Add a new block to the Blockchain
     /// A new BlockHeader instance is created and stored
     /// in memory by the Blockchain
@@ -255,23 +187,6 @@ impl<T: State> Blockchain<T> {
         // Generate block header
         let header = self.header_from(&block);
 
-        // Add block to state
-        // if error encounterd in contract
-        // revert changes and discard block
-        let mut ctrs = Vec::new();
-
-        for ctr in block.body() {
-            match self.update_state_with_ctr(&ctr) {
-                Ok(_) => ctrs.push(ctr),
-                Err(e) => {
-                    for ctr in ctrs {
-                        self.revert_state_with_ctr(&ctr)
-                    }
-                    return Err(e)
-                }
-            };
-        }
-
         // TODO: Store block in file
         self.append_to_chain(header);
         self.blockfile.push(block);
@@ -285,7 +200,6 @@ impl<T: State> Blockchain<T> {
 
 #[cfg(test)]
 mod tests {
-    use crate::state::DefaultState;
 
 use super::*;
     use std::{assert_eq, vec};
@@ -337,58 +251,13 @@ use marketplace_wallet::Owner;
     // Add an empty block to the blockchain
     #[test]
     fn add_empty_block_to_blockchain() -> AgentResult<()> {
-        let state = DefaultState::new();
-
-        let mut chain = Blockchain::new(state);
+        let mut chain = Blockchain::new();
 
         let block = Block::new(vec![]);
 
         chain.add_block(block)?;
 
         assert_eq!(chain.headers.len(), 2);
-        Ok(())
-    }
-
-    // Update a Default state passed to the blockchain
-    #[test]
-    fn update_state_with_blockchain() -> AgentResult<()> {
-        let mut state = DefaultState::new();
-
-        // Test owners
-        let owner = Owner::new_sig();
-        let owner1 = Owner::new_sig();
-
-        // Give owner 1 gdc
-        let opt = vec![
-            TxIO::new(
-                owner.as_lock(), 
-                WU::GDC()
-            )
-        ];
-
-        state.try_update(
-            &Tx::new(0, TxIdentifier::COIN, None, Some(opt))
-        )?;
-
-        // Add state to blockchain
-        let mut chain = Blockchain::new(state);
-
-        // Block with tx where owner send some gdc to another
-        let block = Block::new(vec![ctr(&owner, &owner1)]);
-
-        chain.add_block(block)?;
-
-        // Confirm owner's balances
-        assert_eq!(
-            chain.latest_state().get_gdc_balance(owner.as_lock()),
-            WU::GDC() - WU::try_from(30000).unwrap()
-        );
-
-        assert_eq!(
-            chain.latest_state().get_gdc_balance(owner1.as_lock()),
-            WU::try_from(30000).unwrap()
-        );
-
         Ok(())
     }
 

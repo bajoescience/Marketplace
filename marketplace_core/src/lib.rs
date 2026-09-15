@@ -48,7 +48,7 @@ use marketplace_worker::Worker;
 /// state data structure (block chain or mempool) to handle.
 pub struct Core<T: State, W: Worker> {
     // Blockchain representing dead state
-    chain: Blockchain<T>,
+    chain: Blockchain,
 
     // Mempool containing live state
     mempool: Mempool,
@@ -73,7 +73,7 @@ impl<T: State, W: Worker> Core<T, W> {
 
         // TODO: Update chain with blocks from network first
         // if the blockchain is not up to date
-        let chain = Blockchain::new(state.clone());
+        let chain = Blockchain::new();
 
         // Initialize new mempool to act as live state
         // keeping track of jobs and unfinalized contracts.
