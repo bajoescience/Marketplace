@@ -4,10 +4,32 @@ use crate::wallet::{Lock, Key};
 
 use super::{BorshDeserialize, BorshSerialize, ID};
 
-// Object refrencing another contracts output
+/// # Transaction Input/Output `TXIO` 
+/// 
+/// Structure representing an Input or Output in a Transaction.
+/// 
+/// ## Examples
+/// 
+/// A user sending money to themselves by creating an input,
+/// and an output to add to a transaction.
+/// 
+/// ```
+/// use marketplace_wallet::{Owner};
+/// use marketplace_helpers::objects::WU;
+/// use marketplace_primitives::TxIO;
+/// 
+/// let user = Owner::new_sig();
+/// let lock = user.as_lock();
+/// 
+/// let input = TxIO::new(lock, WU::GDC());
+/// let output = TxIO::new(lock, WU::GDC());
+/// 
+/// // Input is equal to output
+/// assert_eq!(input.amount(), output.amount());
+/// ```
 #[derive(BorshSerialize, BorshDeserialize, Debug, Clone, PartialEq)]
 pub struct TxIO {
-    // Owner of input pubkey hash
+    // Owner
     lock: Lock,
 
     // Amount 
