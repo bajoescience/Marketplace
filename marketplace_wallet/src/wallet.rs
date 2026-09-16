@@ -7,13 +7,16 @@ use schnorrkel::{KEYPAIR_LENGTH, Keypair, SecretKey};
 
 use crate::{helpers::{functions, objects::{Hash, ID}}, owner::Key};
 
+/// # Wallet
+/// 
+/// `Wallet` is a single cryptographic key pair
 pub struct Wallet {
     key: Keypair
 }
 
 impl Wallet {
-    // Create a new Wallet
-    // Initialize new assymetric key pair
+    /// Create a new Wallet by
+    /// initializing a new assymetric key pair
     pub fn new() -> Self {
         let keypair = Keypair::generate_with(OsRng);
 
@@ -22,7 +25,10 @@ impl Wallet {
         }
     }
 
-    // New key in file
+    /// Create a new wallet and add it to a file
+    /// named `keypair.bin`
+    /// 
+    /// **NOTE: Never Expose Your keypair File That Contains Your Private Key.**
     pub fn new_keypair_file() -> Result<(), Box<dyn Error>> {
         let wallet = Wallet::new();
 
@@ -35,7 +41,7 @@ impl Wallet {
         Ok(())
     }
 
-    // Build from keypair file
+    /// Build wallet from keypair file
     pub fn keypair_from_file(path: &str) -> Result<Self, Box<dyn Error>> {
         let mut file = File::open(path)?;
         let mut bytes = Vec::new();
@@ -47,7 +53,7 @@ impl Wallet {
         Ok(Self { key: keypair })
     }
 
-    // Create a new wallet with an existing private key
+    /// Create a new wallet with an existing private key
     pub fn build_from(keypair_byte: &[u8; KEYPAIR_LENGTH]) -> AgentResult<Self> {
         let Ok(signing_key) = Keypair::from_bytes(keypair_byte) else {
             return Err(format!(
@@ -60,17 +66,17 @@ impl Wallet {
         })
     }
 
-    // Get VRF
+    /// Get Key pair
     pub fn keypair(&self) -> &Keypair {
         &self.key
     }
 
-    // Get secret key
+    /// Get secret key
     pub fn secret(&self) -> &SecretKey {
         &self.key.secret
     }
 
-    // Sign a message
+    /// Sign a message
     pub fn sign(&self, msg: &[u8]) -> Key {
         // TODO: Optionally pad message hash
         let context = schnorrkel::signing_context(b"");
@@ -83,7 +89,7 @@ impl Wallet {
         Key::SIG(sig.to_bytes(), pub_key)
     }
 
-    // Public key
+    /// Public key
     pub fn pubkey_bytes(&self) -> ID {
         self.key.public.to_bytes()
     }

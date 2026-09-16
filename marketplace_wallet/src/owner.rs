@@ -5,6 +5,48 @@ use marketplace_helpers::objects::{AgentResult, Hash, IdHash};
 use schnorrkel::{KEYPAIR_LENGTH, Keypair, PublicKey, SIGNATURE_LENGTH, Signature};
 use crate::{Wallet, helpers::{functions, objects::ID}};
 
+/// # Owner
+/// 
+/// `Owner` is an identity that can interact with assets on the marketplace by locking and unlocking 
+/// marketplace primitives which include:
+/// 
+/// - `Work Pointer`
+/// 
+/// - `Result Pointer`
+/// 
+/// - `Transactions`
+/// 
+/// when locking these primitives, the `Lock` generates a `Key` that can be used to later prove ownership of the primitives.
+/// 
+/// **There are multiple types of Owners which include:**
+/// 
+/// ## SIG
+/// 
+/// `SIG` is an `Owner` that locks a primitive by signing it
+/// with a single `Wallet`.
+/// 
+/// ### Examples
+/// 
+/// Initialize a new `SIG Owner`
+/// and sign a message
+/// 
+/// ```
+/// use marketplace_wallet::Owner;
+/// 
+/// let msg = [20u8; 32];
+/// 
+/// let owner = Owner::new_sig();
+/// 
+/// // Sign message
+/// let key = owner.sign(&msg);
+/// 
+/// // Lock form of owner
+/// let lock = owner.as_lock();
+/// 
+/// // Prove signature
+/// assert!(lock.unlock(&key, &msg).is_ok());
+/// ```
+/// 
 pub enum Owner {
     // Single sig containing pubkey hash
     SIG(Wallet),
@@ -14,15 +56,15 @@ pub enum Owner {
 }
 
 impl Owner {
-    // Create a new single owner
+    /// Create a new `Owner` with a single keypair
     pub fn new_sig() -> Self {
         let wallet = Wallet::new();
 
         Self::SIG(wallet)
     }
 
-    // Build single owner from secret key bytes
-    // Create a new wallet with an existing private key
+    /// Build single `Owner` from secret key bytes by
+    /// Create a new wallet with an existing private key
     pub fn build_from(keypair: &[u8; KEYPAIR_LENGTH]) -> AgentResult<Self> {
         let Ok(wallet) = Wallet::build_from(keypair) else {
             return Err(format!(
@@ -76,7 +118,7 @@ impl Owner {
        } 
     }
 
-    pub fn sign(&self, msg: &ID) -> Key {
+    pub fn sign(&self, msg: &[u8]) -> Key {
         match self {
             Self::SIG(wallet) => wallet.sign(msg),
         }
@@ -124,11 +166,86 @@ impl StdHash for Owner {
 }
 
 
-// Lock object which acts as a substitute for Owner in transactions
+/// # Lock
+/// 
+/// `Lock` is a type that enables ownership of a marketplace primitive by locking it. Only a corresponding `Owner`
+/// can unlock it using a `Key`.
+/// 
+/// **There are multiple types of Lock which include:**
+/// 
+/// ## SIG
+/// 
+/// `SIG` contains a single `Wallet` hash (public key hash) of the form
+/// 
+/// ### Examples
+/// 
+/// ```
+/// use marketplace_wallet::{Lock, Wallet};
+/// use marketplace_helpers::objects::Hash;
+/// 
+/// let wallet = Wallet::new();
+/// let lock = Lock::SIG(wallet.hash());
+/// ```
+/// 
+/// or using the standard `Owner` `SIG`
+/// 
+/// ```
+/// use marketplace_wallet::{Lock, Owner};
+/// 
+/// let owner = Owner::new_sig();
+/// let lock = owner.as_lock();
+/// ```
+/// 
+/// **Using a Key, we can unlock a locked primitive**
+/// 
+/// ```
+/// use marketplace_wallet::{Lock, Owner};
+/// 
+/// // primitive hash
+/// let msg = [20u8; 32];
+/// 
+/// let owner = Owner::new_sig();
+/// let lock = owner.as_lock();
+/// 
+/// let key = owner.sign(&msg);
+/// 
+/// // Unlock primitive
+/// assert!(lock.unlock(&key, &msg).is_ok());
+/// ```
+/// 
+/// ## WHITEROOM
+/// 
+/// `WHITEROOM` is a type of `Lock` for `Whiteroom` members in a `Job`. It indicates to the network
+/// that the owner is a whiteroom member.
+/// 
+/// ### Examples
+/// 
+/// ```
+/// use marketplace_wallet::{Lock, Owner};
+/// // primitive hash
+/// let msg = [20u8; 32];
+/// 
+/// let owner = Owner::new_sig();
+/// 
+/// // Note: Whiteroom lock method is different from 
+/// // normal lock method
+/// let lock = owner.as_wr_lock();
+/// 
+/// let key = owner.sign(&msg);
+/// 
+/// // Unlock primitive
+/// assert!(lock.unlock(&key, &msg).is_ok());
+/// ```
+/// 
+/// ## ACCOUNT
+/// 
+/// `ACCOUNT` is a type of `Lock` that proves that a token account owns an asset. They
+/// are a special type of lock 
 #[derive(Debug, Clone, Copy, PartialEq, BorshSerialize, BorshDeserialize)]
 pub enum Lock {
     // Single sig containing pubkey hash
     SIG(ID),
+
     // Each whiteroom member owns the full value locked by the whiteroom
     // this lock contains the owner id of the whiteroom
     WHITEROOM(ID),
@@ -152,6 +269,7 @@ fn unlock(
             "Error: Public key does not match Stored hash"
         ));
     }
+
     // Convert SIG from bytes
     let Ok(sig) = Signature::from_bytes(sig) else {
         return Err(format!(
@@ -196,6 +314,10 @@ impl Lock {
     } 
 }
 
+/// # Key
+/// `Key` is used to unlock a `Lock` type and prove ownership of a locked primitive.
+/// 
+/// **see `Lock`**
 #[derive(Debug, Clone, PartialEq)]
 pub enum Key {
     // (Signature, pubkey)
