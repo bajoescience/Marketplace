@@ -7,8 +7,10 @@ use crate::{Owner};
 
 use schnorrkel::{ Keypair, PublicKey, vrf::{VRF_PREOUT_LENGTH, VRF_PROOF_LENGTH, VRFPreOut, VRFProof}};
 
-// Contains the complete proof context for 
-// Whiteroom membership
+/// # Whiteroom Proof `WRProof`
+/// 
+/// The `WRProof` contains the complete context needed to prove 
+/// Whiteroom membership (see Marketplace Whitepaper)
 #[derive(Debug, BorshSerialize, BorshDeserialize, Clone)]
 pub struct WRProof {
     vdf_opt: Vec<u8>,
@@ -49,7 +51,23 @@ impl WRProof {
     }
 }
 
- 
+/// # Crypto
+/// 
+/// `Crypto` module initializes the needed cryptographic primitives
+/// to execute a whiteroom challenge.
+/// 
+/// It is initialized for each identity given.
+/// 
+/// ## Examples
+/// 
+/// ```
+/// use marketplace_wallet::{Crypto, Owner};
+/// 
+/// // An identity
+/// let owner = Owner::new_sig();
+/// 
+/// let crypto = Crypto::new(&owner);
+/// ```
 pub struct Crypto<'a> {
     vdf: WesolowskiVDF,
 
@@ -69,12 +87,12 @@ impl<'a> Crypto<'a> {
         self.owner.keypair()
     }
 
-    /// Solve VDF problem
+    /// ## Solve VDF
     /// 
-    /// The seed is the hash of the owner public key and the WorkPtr ID
+    /// The `seed` is the hash of the owner public key and the WorkPtr ID
     /// 
-    /// The diff is the result of vdf_difficulty function
-    /// using the parameters work_pay and VRF threshold.
+    /// The `diff` is the result of vdf_difficulty function
+    /// using the parameters `work_pay` and `VRF threshold`.
     fn solve_vdf(&self, seed: &[u8], diff: u64) -> AgentResult<Vec<u8>> {
         match self.vdf.solve(seed, diff) {
             Ok(proof) => Ok(proof),
@@ -161,14 +179,14 @@ impl<'a> Crypto<'a> {
         }
     }
 
-    /// Solve VDF + VRF to get random number to which to check if
-    /// a node has entered the whiteroom.
+    /// This function attempts to join a whiteroom by solving the
+    /// `VDF` + `VRF` (Whiteroom challenge) to get a random number which is used to check if
+    /// an identity has entered the whiteroom.
     /// 
-    /// The seed is the hash of the owner public key and the WorkPtr ID
+    /// The `seed` is the hash of the `owner public key` and the `WorkPtr ID`
     /// 
-    /// The diff is the result of vdf_difficulty function
-    /// using the parameters work_pay and VRF threshold.
-    // Attempt to join whiteroom
+    /// The `diff` is the result of `vdf_difficulty` function
+    /// using the parameters `work_pay` and `VRF threshold`.
     pub fn attempt_wr(&self, seed: &ID, diff: u64) -> AgentResult<WRProof> {
         // Solve VDF
         let vdf_opt = self.solve_vdf(seed, diff)?;
@@ -179,14 +197,13 @@ impl<'a> Crypto<'a> {
         Ok(wr_proof)
     }
 
-    /// Proof whiteroom of a node.
-    /// using the WRProof instance.
+    /// Prove whiteroom membership of an identity using a `WRProof` instance.
     /// 
-    /// The seed is the hash of the owner public key and the WorkPtr ID
-    /// The wr_seed function in the helpers library is useful here.
+    /// The `seed` is the hash of the `owner public key` and the `WorkPtr ID`
+    /// The `wr_seed` function in the helpers library is useful here.
     /// 
-    /// The diff is the result of vdf_difficulty function
-    /// using the parameters work_pay and VRF threshold.
+    /// The `diff` is the result of `vdf_difficulty` function
+    /// using the parameters `work_pay` and `VRF threshold.
     // Verify whiteroom proof
     pub fn wr_prove(
         wr_proof: &WRProof, 

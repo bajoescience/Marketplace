@@ -5,6 +5,10 @@ use marketplace_helpers::{functions, objects::{AgentResult, WorkSize}};
 use marketplace_wallet::{Key, Lock, crypto::WRProof};
 use crate::{Verify, WRVote, helpers::objects::{ID, IdHash, WorkAddr}};
 
+/// # Result Info
+/// 
+/// `Result Info` contains information on a execution result all
+/// whiteroom members should agree on.
 #[derive(BorshSerialize, BorshDeserialize, Debug, Clone)]
 pub struct ResultInfo {
     // Result hash of work executed
@@ -38,19 +42,67 @@ impl PartialEq for ResultInfo {
     }
 }
 
-/// The ResultPtr acts like a smart pointer, and is used by whiteroom members
-/// to reference the following:
+/// # Result Pointer `ResultPtr`
 /// 
-/// A result of the work execution.
+/// The `ResultPtr` is a pointer like type used by whiteroom members
+/// to reference the result of a work execution stored on a decentralized storage newtork.
 /// 
-/// The Work executed by it's WorkPtr instance.
+/// The `ResultPtr` also references the work ID which is the hash of the `WorkPtr`
 /// 
-/// The ResultPtr also contains metadata which includes
-/// the following:
+/// ## Examples
 /// 
-/// Whiteroom transaction: This is a transaction that a whiteroom memeber creates
-/// by spending the whiteroom output from the transaction in the workPtr
-
+/// **NOTE: The values used in this example are dummy values**
+/// 
+/// ```
+/// use marketplace_primitives::{ResultPtr, ResultInfo, Verify};
+/// use marketplace_helpers::objects::{WU, IdHash, WorkSize};
+/// use marketplace_wallet::{crypto::Crypto, Owner};
+/// 
+/// // Hash of WorkPtr
+/// let work_id = [25u8; 32];
+/// let work_size = WU::try_from(20000).unwrap();
+/// 
+/// // Whiteroom member
+/// let owner = Owner::new_sig();
+/// 
+/// // Result Information
+/// let result = ResultInfo::new(
+///     [25u8; 32], 
+///     WorkSize::build(work_size).unwrap()
+/// );
+/// 
+/// // Address of result on decentralized storage network
+/// let res_addr = [25u8; 32];
+/// 
+/// // Proof of whiteroom membership
+/// // which must be less than the epoch's 
+/// // VRF threshold
+/// let crypto = Crypto::new(&owner);
+/// let wr_proof = crypto
+///     .attempt_wr(
+///         // Job seed (see Crypto module)
+///         &[25u8; 32], 
+/// 
+///         // VDF difficulty (see Crypto module)
+///         20)
+///     .unwrap();
+/// 
+/// let mut resultptr = ResultPtr::new(
+///     work_id,
+///     result,
+///     wr_proof,
+///     res_addr,
+///     owner.as_wr_lock(),
+/// );
+/// 
+/// // Lock result pointer to prove ownership
+/// let key = owner.sign(&resultptr.id());
+/// resultptr.add_auth(owner.as_wr_lock(), key, false).unwrap();
+/// 
+/// // Verify it's a valid Result pointer
+/// assert!(resultptr.verify().is_ok());
+/// 
+/// ```
 // Pointer to work output
 #[derive(BorshSerialize, BorshDeserialize, Debug, Clone)]
 pub struct ResultPtr {
@@ -94,6 +146,11 @@ impl PartialEq for ResultPtr {
 }
 
 impl ResultPtr {
+    /// Create a new `ResultPtr`
+    /// 
+    /// # Examples
+    /// 
+    /// **See ResultPtr docs**
     pub fn new(
         work_id: ID,
         result: ResultInfo, 
@@ -209,11 +266,9 @@ impl WRVote for ResultPtr {
 #[cfg(test)]
 mod tests {
     use std::{assert_eq};
-
-use marketplace_helpers::{functions::dum_bytes, objects::{VRF_T, WU}};
-use marketplace_wallet::{Owner, crypto::Crypto};
-
-use super::*;
+    use marketplace_helpers::{functions::dum_bytes, objects::{VRF_T, WU}};
+    use marketplace_wallet::{Owner, crypto::Crypto};
+    use super::*;
 
     pub fn wr_proof(owner: &Owner, vrf_t: VRF_T) -> WRProof {
         let crypto = Crypto::new(owner);
@@ -226,7 +281,7 @@ use super::*;
         ).unwrap()
     }
 
-    pub fn res_ptr(spent: WorkSize, owner: &Owner, wr_proof: WRProof) -> ResultPtr {
+    fn res_ptr(spent: WorkSize, owner: &Owner, wr_proof: WRProof) -> ResultPtr {
         let result = ResultInfo {
             opt_hash: dum_bytes(),
             spent,

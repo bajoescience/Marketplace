@@ -1,40 +1,57 @@
-mod input;
+mod io;
 
 use std::{collections::HashMap, format, panic, vec};
 
-pub use input::TxIO;
+pub use io::TxIO;
 
 use borsh::{BorshDeserialize, BorshSerialize};
 use chrono::{TimeZone, Utc};
 use crate::{JobContract, Verify, helpers::{functions::{self, fee_price}, objects::{AgentResult, ID, IdHash, WU}}};
 use crate::wallet::{Lock, Key};
 
-// Transaction identifier for different types of currencies
-// Coin represents native goldcoin
-// Token represents any other currency with it's own identification
-// The token ID is it's account hash
+
+/// ## Transaction identifier `TxIdentifier`
+/// 
+/// `TxIdentifier` identifies different types of currencies:
+/// 
+/// - `Coin` represents native goldcoin
+/// 
+/// - `Token` represents any other currency with it's own identification `ID`
+/// being it's account hash
 #[derive(BorshSerialize, BorshDeserialize, Debug, Clone)]
 pub enum TxIdentifier {
     COIN,
     TOKEN(Option<ID>),
 }
 
-/// Tx input sum must always equal output sum
-
-// Contract Execution information
-// The Contract object is ultimately validated by the state.
+/// ## Transaction `Tx`
+/// 
+/// `Tx` is a structure describing a change of ownership
+/// of assets between identities.
+/// 
+/// A `Tx` consists of inputs and outputs where:
+/// 
+/// - Inputs are the entity giving an asset.
+/// 
+/// - Outputs are the entity receiving an asset. 
+/// 
+/// `Tx` input sum must always equal output sum
 #[derive(BorshSerialize, BorshDeserialize, Debug, Clone)]
 pub struct Tx {
     // tid: Token ID
     // type identifier of Coin/Token to be spent
     // A COIN value is goldcoin
     tid: TxIdentifier,
+
     // Version
     ver: u32,
+
     // coin inputs
     ipts: Vec<TxIO>,
+
     // Coin ouputs
     opts: Vec<TxIO>,
+    
     // Timestamp
     timestamp: u64,
 }
@@ -67,7 +84,7 @@ impl Tx {
     /// assert!(tx.opts().is_empty());
     /// ```
     
-    // Create a new contract with optional inputs and outputs
+    // Create a new `Tx` with optional inputs and outputs
     pub fn new(
         ver: u32, 
         tid: TxIdentifier, 
@@ -95,9 +112,6 @@ impl Tx {
     /// 
     /// Any remainders encountered during errors it sends back
     /// to the job owner after the Tx instance has been created
-    /// 
-    
-    // Create a new whiteroom transaction
     pub fn from_contract(ver: u32, ctr: &JobContract) -> Self {
         let employer = ctr.input().emp_wr();
         let work_size = ctr.input().work_size().into();
@@ -112,13 +126,13 @@ impl Tx {
         // Only winning whiteroom members receive the pay
         let mut opts = Vec::new();
 
-        // Initalize amount spent using worksie
+        // Initalize amount spent using worksize
         let mut spent = work_size;
         let mut fees = WU::default();
 
         // New money is printed to send to all Whiteroom
         // winning witnesses
-        for witness in ctr.output.winners() {
+        for witness in ctr.output().winners() {
             spent = witness.result().spent().into();
             let fee = fee_price(spent);
 
@@ -157,20 +171,10 @@ impl Tx {
 
     }
 
-    /// Create a whiteroom tx instance in case of an error encountered
-    /// while executing the work.
-    /// 
-    /// Unlike the "whiteroom_tx" associated method, this method sends
-    /// some remainder back to the user
-    
-    // TODO: Create a whiteroom_tx for problematic work
-
-
     /// New account tokens have no inputs as they are 
     /// a start of a new currency.
     /// But this token initializer tx must be unique
-    
-    // Create a new account/ Token
+    /// so that the token can be unique.
     pub fn new_acc(ver: u32, opts: Option<Vec<TxIO>>) -> Self {
         let mut acc = Self {
             tid: TxIdentifier::TOKEN(None),
@@ -192,7 +196,7 @@ impl Tx {
 
     // Initialize genesis state for goldcoin
     pub fn genesis() -> Self {
-        // TODO: Belongs to founder 
+        // Belongs to founder 
         let opts = vec![TxIO::new( 
             Lock::SIG(functions::founders()),
             WU::try_from(300 * 10u128.pow(12)).unwrap(),

@@ -1,7 +1,7 @@
 //! # Marketplace Core
 //! 
 //! `marketplace core` is the root package of the Marketplace project. This package initializes the `Core` data structure 
-//! which manages the state of a marketplace node comprising of both `Live State` and `Dead State`.
+//! which manages the state of a marketplace node comprising of the following States.
 //! 
 //! ## Live State
 //! 
@@ -15,6 +15,12 @@
 //! 
 //! `Dead State` is the the data structure that stores and manages finalized Contracts which is the 
 //! `Block chain`. The data in the `Dead State` is permanent, and cannot be changed.
+//! 
+//! ## Financial State
+//! 
+//! `Financial State` is the state of account balances on the network. This data structure keeps track of 
+//! the remainder asset of every owner on the network.
+//! 
 //! 
 //! The `Core` data structure manages state by listening for event messages from peers, and updating the state accordingly.
 //! 
@@ -34,50 +40,52 @@ use marketplace_worker::Worker;
 
 /// This is the `Core` data structure that manages the state of the Marketplace node.
 /// 
-/// The state comprises of the `Mempool` which stores live state, and the `Blockchain` which
-/// is the dead state.
+/// The state comprises of the `Mempool` which stores live state, the `Blockchain` which
+/// is the dead state, and the `Financial State` .
 /// 
 /// The `Core` data structure methods handle incoming messages from the network
 /// by validating the messages, and handing them over to the appropiate 
 /// state data structure (block chain or mempool) to handle.
 pub struct Core<T: State, W: Worker> {
     // Blockchain representing dead state
-    chain: Blockchain<T>,
+    chain: Blockchain,
 
     // Mempool containing live state
-    mempool: Mempool<T, W>,
+    mempool: Mempool,
+
+    // Financial State of the network
+    state: T,
+
+    // Worker that executes a VDF, and a Job
+    worker: Option<W>
 }
 
 impl<T: State, W: Worker> Core<T, W> {
     /// Initialize a new `Core` object
     /// which comprises of initializing the 
-    /// `Live` and `Dead` state.
+    /// `Live`, `Dead`, and Financial states.
     /// 
     /// This method also takes as a parameter a worker that implements
     /// the `Worker` trait. This worker executes jobs and whiteroom challenges
     /// on behalf of the nodes.
-
-    // TODO: Should the worker be inside the core? why not just use a channel
-    // where the core can communicate with a worker on the outside, as there may be multiple workers
-    // for multiple types of work (whiteroom challenge or job execution) or even multiple types of jobs.
-    // I'll open a discussion
     pub fn new(state: T, worker: Option<W>) -> Self {
         // Initialize the blockchain as the dead state
-        let chain = Blockchain::new(state);
 
         // TODO: Update chain with blocks from network first
         // if the blockchain is not up to date
+        let chain = Blockchain::new();
 
         // Initialize new mempool to act as live state
-        // Using past data from the blockchain
-        // 
+        // keeping track of jobs and unfinalized contracts.
+        let mempool = Mempool::new();
+
         // A Worker is also included to execute jobs
         // and solve whiteroom challenges.
-        let mempool = Mempool::new(&chain, worker);
-
         Self {
             chain,
             mempool,
+            state,
+            worker
         }
     }
 
@@ -164,8 +172,13 @@ impl<T: State, W: Worker> Core<T, W> {
             blk_hdr.clone()
         );
 
+        let ctr = Contract::JOB(jobctr);
+
+        // Update asset state using contract
+        self.try_sub_ctr(&ctr)?;
+
         // Handover job contract to mempool to handle
-        self.mempool.add_job(Contract::JOB(jobctr));
+        self.mempool.add_job(ctr);
 
         Ok(())
     }
@@ -175,10 +188,23 @@ impl<T: State, W: Worker> Core<T, W> {
     /// 
     /// The `Result Pointer` is sent to the network as a result of a Job.
     /// 
-    /// To handle the `Result Pointer`, simply hands it over to a mempool handler
+    /// To handle the `Result Pointer`, simply hand it over to a mempool handler
     /// that returns an `Error` if any problem occurs. (See Mempool) 
+    /// 
+    /// If result pointer, revert job. 
     fn handle_result_ptr(&mut self, witness: &ResultPtr) -> AgentResult<()> {
-        self.mempool.add_resptr(witness.clone())
+        let can_consensus = self.mempool.add_resptr(witness.clone())?;
+
+        // If job cannot reach consensus, withdraw job
+        // revert state
+        if !can_consensus {
+            let ctr = self.mempool.take_job(witness.work_id())
+                .expect("Illegal: Contract should still exist");
+
+            self.revert_sub_ctr(&ctr);
+        }
+
+        Ok(())
     }
 
     // TODO: Handle block and handover block to mempool
@@ -186,4 +212,57 @@ impl<T: State, W: Worker> Core<T, W> {
 
     // TODO: Handle new block header to the state
     // Also update blockchain to accomodate new chosen block
+}
+
+
+// Handle Ledger State changes
+impl<T: State, W: Worker> Core<T, W> {
+
+    // Subtracts Contract transaction inputs from the global state
+    // If inputs could not be found, a double spend error is assumed.
+    pub fn try_sub_ctr(&mut self, ctr: &Contract) -> AgentResult<()> {
+        match ctr {
+            Contract::JOB(jobctr) => {
+                self.state.try_sub_ipt(&jobctr.get_tx())
+            },
+            Contract::TX(txctr) => {
+                // Store tx already used to update state
+                // so that if any error occurs later, all state
+                // changes can be safely reversed
+                let mut txs = Vec::new();
+
+                for tx in txctr.get_tx().iter() {
+                    if let Err(e) = self.state.try_sub_ipt(tx) {
+                        // Handle error by reverting previous state changes
+                        for tx in txs.into_iter().rev() {
+                            self.state.revert_sub_ipt(tx);
+                        }
+
+                        return Err(e)
+                    }
+
+                    txs.push(tx);
+                }
+
+                Ok(())
+            },
+        }
+    }
+
+    // Revert an updated contract state
+    // which is done in the reverse way state was updated
+    // representing a rollback.
+    pub fn revert_sub_ctr(&mut self, ctr: &Contract) {
+        match ctr {
+            Contract::JOB(jobctr) => {
+                self.state.revert_sub_ipt(&jobctr.get_tx());
+            },
+            Contract::TX(txctr) => {
+                // Rollback in reverse
+                for tx in txctr.get_tx().iter().rev() {
+                    self.state.revert_sub_ipt(tx);
+                }
+            },
+        }
+    }
 }

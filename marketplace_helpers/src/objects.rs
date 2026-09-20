@@ -21,7 +21,40 @@ pub enum ValueError {
     BelowMinimum,
 }
 
-// Hold how coin amount in Work Units type
+/// # Work Units `WU`
+/// 
+/// `WU` the standard integer mesaurement in the marketplace.
+/// 
+/// ## Goldbar () 
+/// 
+/// 1 gdb = 3 * 10^15 WU
+/// 
+/// ```
+/// use marketplace_helpers::objects::WU;
+/// 
+/// let one_gdb = WU::GDB();
+/// ```
+/// 
+/// ## Goldcoin (gdc)
+/// 
+/// 1 gdc = 3 * 10^12 WU
+/// 
+/// ```
+/// use marketplace_helpers::objects::WU;
+/// 
+/// let one_gdc = WU::GDC();
+/// ```
+/// 
+/// ## Goldscent (gds)
+/// 
+/// 1 gds = 3 * 10^9 WU
+/// 
+/// ```
+/// use marketplace_helpers::objects::WU;
+/// 
+/// let one_gds = WU::GDS();
+/// ```
+
 #[derive(BorshSerialize, BorshDeserialize, Clone, Copy, Debug, PartialEq, Eq, PartialOrd)]
 pub struct WU(u128);
 
@@ -49,7 +82,7 @@ impl WU {
         WU(3 * 10u128.pow(12))
     }
 
-    // 1 goldcent
+    // 1 goldscent
     pub fn GDS() -> Self {
         WU(3 * 10u128.pow(9))
     }

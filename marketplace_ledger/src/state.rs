@@ -4,7 +4,7 @@
 //! storing, and updating 
 //! UTXO state
 
-use std::{collections::{HashMap}, format};
+use std::{collections::HashMap, format};
 
 use marketplace_helpers::{functions, objects::{AgentResult, ID, IdHash, WU}};
 use marketplace_wallet::Lock;
@@ -19,36 +19,28 @@ pub trait State: Clone {
     /// Substracting the amount in a TxIO from the owner's balance as a Tx input,
     /// 
     /// Return any double spend error and roll back changes.
-    fn try_update_ipt(&mut self, tx: &Tx) -> AgentResult<()>;
+    fn try_sub_ipt(&mut self, tx: &Tx) -> AgentResult<()>;
 
     // Revert tx inputs if anything goes wrong
-    fn revert_ipt(&mut self, tx: &Tx);
+    fn revert_sub_ipt(&mut self, tx: &Tx);
 
     /// Update opt
     /// by adding the tx output TxIO to state
-    fn update_opt(&mut self, tx: &Tx);
+    fn add_opt(&mut self, tx: &Tx);
 
     /// Revert tx ouputs if anything goes wrong
     /// Note: Error encountered reverting will cause
     /// this method to panic
-    fn revert_opt(&mut self, tx: &Tx) -> AgentResult<()>;
+    fn revert_add_opt(&mut self, tx: &Tx) -> AgentResult<()>;
 
     /// Update by subtracting Tx ipts,
     /// and adding Tx opts
     fn try_update(&mut self, tx: &Tx) -> AgentResult<()> {
-        self.try_update_ipt(tx)?;
+        self.try_sub_ipt(tx)?;
 
-        self.update_opt(tx);
+        self.add_opt(tx);
 
         Ok(())
-    }
-
-    /// Revert by adding Tx ipts,
-    /// and subtracting Tx opts
-    fn revert(&mut self, tx: &Tx) -> AgentResult<()> {
-        self.revert_ipt(tx);
-
-        self.revert_opt(tx)
     }
 
     /// Get owner's a lock goldcoin balance.
@@ -188,7 +180,7 @@ impl DefaultState {
 
 impl State for DefaultState {
     // Attempt to remove
-    fn try_update_ipt(&mut self, tx: &Tx) -> AgentResult<()> {
+    fn try_sub_ipt(&mut self, tx: &Tx) -> AgentResult<()> {
         let balances = self.get_balances(tx)?;
 
         // Keep track of used TxIO
@@ -201,7 +193,7 @@ impl State for DefaultState {
                 Ok(_) => imp.push(ipt),
 
                 Err(e) => {
-                    for ipt in imp {
+                    for ipt in imp.into_iter().rev() {
                         balances.add(ipt)
                     }
 
@@ -214,18 +206,18 @@ impl State for DefaultState {
     }
 
     // Revert input given any error
-    fn revert_ipt(&mut self, tx: &Tx) {
+    fn revert_sub_ipt(&mut self, tx: &Tx) {
         let balances = self.get_balances(tx)
             .expect("Illegal: Token should exist, but not found");
 
         // Add each input back to the state
-        for ipt in tx.ipts() {
+        for ipt in tx.ipts().iter().rev() {
             balances.add(ipt);
         }
     }
 
     // Update only tx output
-    fn update_opt(&mut self, tx: &Tx) {
+    fn add_opt(&mut self, tx: &Tx) {
         // Balances should already exists as we need to add input 
         // before adding outputs
         let balances = self.get_balances(tx)
@@ -239,12 +231,12 @@ impl State for DefaultState {
     }
 
     // Revert output
-    fn revert_opt(&mut self, tx: &Tx) -> AgentResult<()> {
+    fn revert_add_opt(&mut self, tx: &Tx) -> AgentResult<()> {
         let balances = self.get_balances(tx)?;
 
-        // Add each output to the corresponding
-        // owner's balance
-        for opt in tx.opts() {
+        // Remove each output from the corresponding
+        // owner's balance in reverse order
+        for opt in tx.opts().iter().rev() {
             balances.sub(opt)?;
         }
 

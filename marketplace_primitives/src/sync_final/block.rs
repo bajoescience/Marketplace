@@ -22,6 +22,12 @@ pub struct BlockHeader {
 
     // VRF threshold
     vrf_t: VRF_T,
+
+    // TODO: Proposer: identity that proposed this block.
+    // the proposer does not contribute to the block hash.
+
+    // TODO: Valdators: whiteroom identity that validated this block.
+    // the validators do not contribute to the block hash.
 }
 
 // Associated functions
@@ -216,7 +222,7 @@ mod tests {
 use marketplace_wallet::Owner;
 
 use crate::JobContract;
-    use crate::contract::tests::{resultptr, workptr};
+    use crate::par_exec::contract::job::tests::{resultptr, workptr};
     use super::*;
 
     // Valid Job contract

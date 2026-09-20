@@ -1,8 +1,8 @@
 //! # Work Pointer
 //! 
 //! A module that implements the Work Pointer
-//! referencing a comput task on a decentralize 
-//! storage network as described by the 
+//! referencing a compute task on a decentralized
+//! storage network as described in the 
 //! Marketplace Whitepaper
 
 use std::collections::HashMap;
@@ -16,32 +16,68 @@ use marketplace_wallet::{Key, Lock};
 use crate::{Verify};
 use crate::helpers::objects::{ID, WorkAddr, AgentResult, IdHash};
 
-// When to start executing work input
+/// When to start executing work
 #[derive(BorshSerialize, BorshDeserialize, Debug, Clone)]
 pub enum ExecuteTime {
     // Execute immediately
     NOW,
+
     // Execute after miliseconds
     AFTER(u64),
+
     // Execute at specified time
     AT(u64),
 }
 
-/// The WorkPtr acts like a smart pointer to a specific work to be executed
-/// referenced by an address in some storage system that can
-/// be accessed by other nodes.
+/// # Work Pointer `WorkPtr`
 /// 
-/// The WorkPtr also contains what can be considered metadata information
-/// specifying the transaction for executing the work and the time to
-/// start executing.
+/// `WorkPtr` is a pointer like type that references a specific work to be executed
+/// by it's address in a decentralized storage system which is accessible by other nodes.
 /// 
-/// It contains just enough information for nodes to start executing 
-/// a work considered as a job, and transactions must be in goldcoin.
+/// It is sent to the network by an employer to initiate a `Job` 
 /// 
-/// The WorkPtr also has authentication to prove ownership of coins/tokens
-/// held in the transaction, and in the work execution.
-
-// Pointer to work
+/// The `WorkPtr` can be locked to prove ownership.
+/// 
+/// ## Example
+/// 
+/// **NOTE: The values used in this example are dummy values**
+/// 
+/// ```
+/// use marketplace_primitives::{WorkPtr, ExecuteTime, BlockHeader, Verify};
+/// use marketplace_helpers::objects::{WU, IdHash, WorkSize};
+/// use marketplace_wallet::Owner;
+/// 
+/// // Address of Work in Decentralized staorage
+/// let work_address = [20u8; 32];
+/// 
+/// // Work size of one gdc
+/// let work_size = WU::GDC();
+/// 
+/// // Time to execute work
+/// let do_at = ExecuteTime::NOW;
+/// 
+/// // Employer
+/// let employer = Owner::new_sig();
+/// 
+/// // ID of latest block header
+/// let blk_hdr = BlockHeader::genesis();
+/// 
+/// // Create work pointer instance
+/// let mut workptr = WorkPtr::new(
+///     work_address,
+///     WorkSize::build(work_size).unwrap(),
+///     employer.as_wr_lock(),
+///     blk_hdr.id(),
+///     do_at
+/// );
+/// 
+/// // Lock work pointer to prove ownership
+/// let key = employer.sign(&workptr.id());
+/// workptr.add_auth(employer.as_wr_lock(), key, false).unwrap();
+/// 
+/// // Verify it's a valid Work Pointer
+/// assert!(workptr.verify().is_ok());
+/// ```
 #[derive(BorshSerialize, BorshDeserialize, Debug, Clone)]
 pub struct WorkPtr {
     // Address of where work is stored
@@ -67,6 +103,48 @@ pub struct WorkPtr {
 }
 
 impl WorkPtr {
+    /// Create a new `WorkPtr` instance
+    /// 
+    /// # Example
+    /// 
+    /// **NOTE: The values used in this example are dummy values**
+    /// 
+    /// ```
+    /// use marketplace_primitives::{WorkPtr, ExecuteTime, BlockHeader, Verify};
+    /// use marketplace_helpers::objects::{WU, IdHash, WorkSize};
+    /// use marketplace_wallet::Owner;
+    /// 
+    /// // Address of Work in Decentralized staorage
+    /// let work_address = [20u8; 32];
+    /// 
+    /// // Work size of one gdc
+    /// let work_size = WU::GDC();
+    ///  
+    /// // Time to execute work
+    /// let do_at = ExecuteTime::NOW;
+    /// 
+    /// // Employer
+    /// let employer = Owner::new_sig();
+    /// 
+    /// // ID of latest block header
+    /// let blk_hdr = BlockHeader::genesis();
+    /// 
+    /// // Create work pointer instance
+    /// let mut workptr = WorkPtr::new(
+    ///     work_address,
+    ///     WorkSize::build(work_size).unwrap(),
+    ///     employer.as_wr_lock(),
+    ///     blk_hdr.id(),
+    ///     do_at
+    /// );
+    /// 
+    /// // Lock work pointer to prove ownership
+    /// let key = employer.sign(&workptr.id());
+    /// workptr.add_auth(employer.as_wr_lock(), key, false).unwrap();
+    /// 
+    /// // Verify it's a valid Work Pointer
+    /// assert!(workptr.verify().is_ok());
+    /// ```
     pub fn new(
         work_addr: ID, 
         size: WorkSize, 
@@ -113,7 +191,10 @@ impl WorkPtr {
 
 // Setter methods
 impl WorkPtr {
-    // force parameter will overide any previous associated keys
+    /// Authenticate a `WorkPtr` by adding Lock and Key to prove ownership
+    /// of a `WorkPtr` 
+    ///
+    ///  force parameter will overide any previous associated keys
     pub fn add_auth(&mut self, lock: Lock, key: Key, force: bool) -> AgentResult<()> {
         match self.auth.entry(lock.id()) {
             Entry::Vacant(entry) => {
