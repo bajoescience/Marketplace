@@ -7,7 +7,6 @@ use marketplace_wallet::{Key, Lock};
 
 use crate::{Tx, Verify};
 
-
 #[derive(BorshSerialize, BorshDeserialize, Debug, Clone)]
 pub struct TxContract {
     bill: Vec<Tx>,
@@ -57,9 +56,8 @@ impl TxContract {
 
 // Setter methods
 impl TxContract {
-    pub fn get_tx(&self) -> impl Iterator<Item = &Tx> {
-        self.bill
-            .iter()
+    pub fn get_tx(&self) -> &Vec<Tx> {
+        &self.bill
     } 
 }
 

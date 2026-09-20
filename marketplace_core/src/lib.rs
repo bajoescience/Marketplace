@@ -175,7 +175,7 @@ impl<T: State, W: Worker> Core<T, W> {
         let ctr = Contract::JOB(jobctr);
 
         // Update asset state using contract
-        self.state.try_sub_ctr(&ctr)?;
+        self.try_sub_ctr(&ctr)?;
 
         // Handover job contract to mempool to handle
         self.mempool.add_job(ctr);
@@ -201,7 +201,7 @@ impl<T: State, W: Worker> Core<T, W> {
             let ctr = self.mempool.take_job(witness.work_id())
                 .expect("Illegal: Contract should still exist");
 
-            self.state.revert_sub_ctr(&ctr);
+            self.revert_sub_ctr(&ctr);
         }
 
         Ok(())
@@ -212,4 +212,57 @@ impl<T: State, W: Worker> Core<T, W> {
 
     // TODO: Handle new block header to the state
     // Also update blockchain to accomodate new chosen block
+}
+
+
+// Handle Ledger State changes
+impl<T: State, W: Worker> Core<T, W> {
+
+    // Subtracts Contract transaction inputs from the global state
+    // If inputs could not be found, a double spend error is assumed.
+    pub fn try_sub_ctr(&mut self, ctr: &Contract) -> AgentResult<()> {
+        match ctr {
+            Contract::JOB(jobctr) => {
+                self.state.try_sub_ipt(&jobctr.get_tx())
+            },
+            Contract::TX(txctr) => {
+                // Store tx already used to update state
+                // so that if any error occurs later, all state
+                // changes can be safely reversed
+                let mut txs = Vec::new();
+
+                for tx in txctr.get_tx().iter() {
+                    if let Err(e) = self.state.try_sub_ipt(tx) {
+                        // Handle error by reverting previous state changes
+                        for tx in txs.into_iter().rev() {
+                            self.state.revert_sub_ipt(tx);
+                        }
+
+                        return Err(e)
+                    }
+
+                    txs.push(tx);
+                }
+
+                Ok(())
+            },
+        }
+    }
+
+    // Revert an updated contract state
+    // which is done in the reverse way state was updated
+    // representing a rollback.
+    pub fn revert_sub_ctr(&mut self, ctr: &Contract) {
+        match ctr {
+            Contract::JOB(jobctr) => {
+                self.state.revert_sub_ipt(&jobctr.get_tx());
+            },
+            Contract::TX(txctr) => {
+                // Rollback in reverse
+                for tx in txctr.get_tx().iter().rev() {
+                    self.state.revert_sub_ipt(tx);
+                }
+            },
+        }
+    }
 }

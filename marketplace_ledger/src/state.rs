@@ -4,11 +4,11 @@
 //! storing, and updating 
 //! UTXO state
 
-use std::{collections::HashMap, format, todo};
+use std::{collections::HashMap, format};
 
 use marketplace_helpers::{functions, objects::{AgentResult, ID, IdHash, WU}};
 use marketplace_wallet::Lock;
-use marketplace_primitives::{Contract, Tx, TxIO, TxIdentifier};
+use marketplace_primitives::{Tx, TxIO, TxIdentifier};
 
 /// State trait defines a set of methods that allows the use 
 /// of a custom Data Structure to handle the balance sheet of 
@@ -26,67 +26,19 @@ pub trait State: Clone {
 
     /// Update opt
     /// by adding the tx output TxIO to state
-    fn update_opt(&mut self, tx: &Tx);
+    fn add_opt(&mut self, tx: &Tx);
 
     /// Revert tx ouputs if anything goes wrong
     /// Note: Error encountered reverting will cause
     /// this method to panic
-    fn revert_opt(&mut self, tx: &Tx) -> AgentResult<()>;
-
-    /// Update state by subtracting inputs from the 
-    /// `Contract`
-    /// 
-    /// If error occurs because of double spends, the error is returned
-    fn try_sub_ctr(&mut self, ctr: &Contract) -> AgentResult<()> {
-        match ctr {
-            Contract::JOB(jobctr) => self.try_sub_ipt(&jobctr.get_tx()),
-            Contract::TX(txctr) => {
-                todo!()
-            }
-        }
-    }
-
-    /// Revert state by adding removed inputs from `Contract` back.
-    /// 
-    /// The input is first checked, and if the input exists, the 
-    /// function registers an error and `panics` assuming a corrupted state.
-    fn revert_sub_ctr(&mut self, ctr: &Contract);
-
-    /// Update state by adding outputs from a `Contract`
-    fn add_ctr(&mut self, ctr: &Contract);
-
-    /// Revert state by removing added outputs.
-    /// 
-    /// If any output does not already exist when trying to remove it, an
-    /// error is registered, and the function `panics` assuming a corrupted state.
-    fn revert_add_ctr(&mut self, ctr: &Contract);
+    fn revert_add_opt(&mut self, tx: &Tx) -> AgentResult<()>;
 
     /// Update by subtracting Tx ipts,
     /// and adding Tx opts
-    fn try_update_ctr(&mut self, ctr: &Contract) -> AgentResult<()> {
-        self.try_sub_ctr(ctr)?;
+    fn try_update(&mut self, tx: &Tx) -> AgentResult<()> {
+        self.try_sub_ipt(tx)?;
 
-        self.add_ctr(ctr);
-
-        Ok(())
-    }
-
-    /// Update by subtracting Tx ipts,
-    /// and adding Tx opts
-    fn try_update(&mut self, ctr: &Contract) -> AgentResult<()> {
-        self.try_sub_ctr(ctr)?;
-
-        self.add_ctr(ctr);
-
-        Ok(())
-    }
-
-    /// Revert by removing Contract ipts,
-    /// and adding Contract opts
-    fn revert(&mut self, ctr: &Contract) -> AgentResult<()> {
-        self.revert_add_ctr(ctr);
-
-        self.revert_sub_ctr(ctr);
+        self.add_opt(tx);
 
         Ok(())
     }
@@ -241,7 +193,7 @@ impl State for DefaultState {
                 Ok(_) => imp.push(ipt),
 
                 Err(e) => {
-                    for ipt in imp {
+                    for ipt in imp.into_iter().rev() {
                         balances.add(ipt)
                     }
 
@@ -259,13 +211,13 @@ impl State for DefaultState {
             .expect("Illegal: Token should exist, but not found");
 
         // Add each input back to the state
-        for ipt in tx.ipts() {
+        for ipt in tx.ipts().iter().rev() {
             balances.add(ipt);
         }
     }
 
     // Update only tx output
-    fn update_opt(&mut self, tx: &Tx) {
+    fn add_opt(&mut self, tx: &Tx) {
         // Balances should already exists as we need to add input 
         // before adding outputs
         let balances = self.get_balances(tx)
@@ -279,12 +231,12 @@ impl State for DefaultState {
     }
 
     // Revert output
-    fn revert_opt(&mut self, tx: &Tx) -> AgentResult<()> {
+    fn revert_add_opt(&mut self, tx: &Tx) -> AgentResult<()> {
         let balances = self.get_balances(tx)?;
 
-        // Add each output to the corresponding
-        // owner's balance
-        for opt in tx.opts() {
+        // Remove each output from the corresponding
+        // owner's balance in reverse order
+        for opt in tx.opts().iter().rev() {
             balances.sub(opt)?;
         }
 
