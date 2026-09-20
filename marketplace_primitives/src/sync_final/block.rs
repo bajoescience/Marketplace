@@ -22,6 +22,12 @@ pub struct BlockHeader {
 
     // VRF threshold
     vrf_t: VRF_T,
+
+    // TODO: Proposer: identity that proposed this block.
+    // the proposer does not contribute to the block hash.
+
+    // TODO: Valdators: whiteroom identity that validated this block.
+    // the validators do not contribute to the block hash.
 }
 
 // Associated functions
