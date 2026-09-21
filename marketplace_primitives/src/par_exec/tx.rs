@@ -199,7 +199,7 @@ impl Tx {
         // Belongs to founder 
         let opts = vec![TxIO::new( 
             Lock::SIG(functions::founders()),
-            WU::try_from(300 * 10u128.pow(12)).unwrap(),
+            WU::try_from(100).unwrap() * WU::GDC(),
         )];
 
         // This timestamp is a constant

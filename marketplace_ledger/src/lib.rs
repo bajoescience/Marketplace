@@ -125,14 +125,6 @@ impl Blockchain {
         hdr.average()
     }
 
-    // Create a new Block header using Block
-    pub fn header_from(&self, block: &Block) -> BlockHeader {
-        BlockHeader::new(
-            block, 
-            self.latest_hdr()
-        )
-    }
-
     // Total goldcoin in existence
     pub fn total_gdc(&self) -> WU {
         self.total
@@ -185,7 +177,7 @@ impl Blockchain {
         self.validate_block(&block)?;
 
         // Generate block header
-        let header = self.header_from(&block);
+        let header = block.header().clone();
 
         // TODO: Store block in file
         self.append_to_chain(header);
@@ -253,7 +245,7 @@ use marketplace_wallet::Owner;
     fn add_empty_block_to_blockchain() -> AgentResult<()> {
         let mut chain = Blockchain::new();
 
-        let block = Block::new(vec![]);
+        let block = Block::new(&BlockHeader::genesis(), vec![]);
 
         chain.add_block(block)?;
 
