@@ -37,7 +37,7 @@ impl Contract {
     pub fn new_coins(&self) -> WU {
         if let Self::JOB(jobctr) = self {
             jobctr.new_gdc()
-        }else {
+        } else {
             WU::default()
         }
     }

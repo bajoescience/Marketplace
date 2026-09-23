@@ -84,5 +84,17 @@ impl Block {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
+    use std::assert_eq;
+
+use marketplace_helpers::objects::WU;
+
+use super::*;
+
+    // Test gdc of block
+    #[test]
+    pub fn genesis_gdc() {
+        let genesis = Block::genesis();
+
+        assert_eq!(genesis.header().new_gdc(), WU::GDC());
+    }
 }

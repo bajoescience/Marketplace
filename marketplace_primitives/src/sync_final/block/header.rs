@@ -39,7 +39,10 @@ impl BlockHeader {
             epoch: 0,
             ctr_merkle_root: genesis_body.root(),
             prev: [0u8; 32],
-            new_gdc: genesis_body.total(),
+
+            // Amount of new gdc
+            new_gdc: WU::GDC(),
+            
             average: WU::single(),
 
             // Max 255 bit number which means a
