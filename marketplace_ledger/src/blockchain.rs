@@ -136,6 +136,18 @@ impl Blockchain {
             ))
         }
 
+        // Ensure block references the last block
+        let current = self.latest_block()
+            .expect("Error: Latest block does not exist");
+
+        if block.header().prev() != current.id() {
+            return Err(format!(
+                "Error: Block {} does not reference previous block {}",
+                functions::from_bytes(&block.id()),
+                functions::from_bytes(&current.id())
+            ));
+        }
+
         Ok(())
     }
 }
@@ -211,7 +223,7 @@ impl Blockchain {
         Ok(block)
     }
 
-    // Total goldcoin in existence
+    /// Total goldcoin in chain
     pub fn total_gdc(&self) -> StdResult<WU> {
         let metadata = self.db
             .begin_read()?
@@ -225,6 +237,19 @@ impl Blockchain {
         let int = u128::from_be_bytes(bytes.value().try_into()?);
 
         Ok(WU::try_from(int).unwrap())
+    }
+
+    /// Check if a block id belongs to a recent block
+    /// 
+    /// A recent block is either the latest block or the block before it.
+    pub fn is_recent(&self, id: ID) -> StdResult<bool> {
+        let latest = self.latest_block()?;
+
+        if latest.id() == id || latest.header().prev() == id {
+            return Ok(true)
+        }
+
+        Ok(false)
     }
 
     /// # Blockchain Iterator

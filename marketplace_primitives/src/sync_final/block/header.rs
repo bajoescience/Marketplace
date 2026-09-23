@@ -112,6 +112,11 @@ impl BlockHeader {
     pub fn vrf_t(&self) -> VRF_T {
         self.vrf_t
     }
+
+    // Get previous block header
+    pub fn prev(&self) -> ID {
+        self.prev
+    }
 }
 
 impl PartialEq for BlockHeader {
