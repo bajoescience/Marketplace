@@ -1506,6 +1506,7 @@ dependencies = [
  "marketplace_primitives",
  "marketplace_wallet",
  "marketplace_worker",
+ "redb",
 ]
 
 [[package]]
@@ -1879,6 +1880,15 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "5da7e78a036ce858e8d55b7e7dc8ba3a88b78350fd2155d3591bbd966b58589e"
 dependencies = [
  "rustversion",
+]
+
+[[package]]
+name = "redb"
+version = "4.3.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "fb338a6c67830a61bed824b78c2bb034ab1ff401a20616bd7957524f4fdc2f22"
+dependencies = [
+ "libc",
 ]
 
 [[package]]

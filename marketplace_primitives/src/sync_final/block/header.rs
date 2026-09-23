@@ -5,6 +5,9 @@ use crate::{WRVote, sync_final::block::BlockBody};
 
 #[derive(BorshSerialize, BorshDeserialize, Debug, Clone, Copy)]
 pub struct BlockHeader {
+    // Epoch
+    epoch: u64,
+
     // Contract merkle root
     ctr_merkle_root: Option<ID>,
 
@@ -33,6 +36,7 @@ impl BlockHeader {
         let genesis_body = BlockBody::genesis();
 
         Self {
+            epoch: 0,
             ctr_merkle_root: genesis_body.root(),
             prev: [0u8; 32],
             new_gdc: genesis_body.total(),
@@ -56,6 +60,7 @@ impl BlockHeader {
         );
 
         Self {
+            epoch: prev_header.epoch() + 1,
             ctr_merkle_root: body.root(),
             prev: prev_header.id(),
             new_gdc: body.total(),
@@ -73,6 +78,11 @@ impl BlockHeader {
 
 // Getter methods
 impl BlockHeader {
+    // Get epoch
+    pub fn epoch(&self) -> u64 {
+        self.epoch
+    }
+
     // Get VDF Difficulty for blockheader
     pub fn vdf_diff(&self) -> u64 {
         // Work size is total work done on a job by

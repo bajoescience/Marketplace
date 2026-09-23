@@ -12,3 +12,4 @@ marketplace_wallet = {path = "../marketplace_wallet", version = "0.1.0"}
 marketplace_primitives = {path = "../marketplace_primitives", version = "0.1.0"}
 marketplace_worker = {path = "../marketplace_worker", version = "0.1.0"}
 chrono = "0.4.45"
+redb = "4.3.0"

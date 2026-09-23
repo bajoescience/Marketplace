@@ -1,4 +1,4 @@
-use std::{fmt, format, iter::Sum, ops::{Add, Div, Mul, Sub}, write};
+use std::{error::Error, fmt, format, iter::Sum, ops::{Add, Div, Mul, Sub}, write};
 
 use borsh::{BorshDeserialize, BorshSerialize};
 
@@ -212,6 +212,8 @@ pub struct Stall {
 
 // Clear error message
 pub type AgentResult<T> = Result<T, String>;
+
+pub type StdResult<T> = Result<T, Box<dyn Error + 'static>>;
 
 /// VRF threshold
 pub type VRF_T = ID;
