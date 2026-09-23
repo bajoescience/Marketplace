@@ -1,8 +1,8 @@
 use marketplace_helpers::{functions, objects::{AgentResult, ID, IdHash, StdResult, WU}};
 
-use marketplace_primitives::{Block, BlockHeader, Contract, Verify};
+use marketplace_primitives::{Block, Contract, Verify};
 
-use std::{collections::{VecDeque}, format, path::Path};
+use std::{format, path::Path};
 
 use redb::{Database, Error, ReadableDatabase, ReadableTable, ReadableTableMetadata, TableDefinition};
 
@@ -26,9 +26,6 @@ const METADATA: TableDefinition<&str, &[u8]> = TableDefinition::new("metadata");
 // The block and headers are kept in a file
 // while only the headers are kept in memory
 pub struct Blockchain {
-    // Latest Block headers
-    latest: VecDeque<ID>,
-
     // Database
     db: Database
 }
@@ -86,16 +83,12 @@ impl Blockchain {
     /// This is used in the initialization 
     /// of the Marketplace State
     pub fn init(path: impl AsRef<Path>) -> StdResult<Self> {
-        // Store latest headers
-        let latest = VecDeque::with_capacity(2);
-
         // Initialize blockchain database
         let db = Database::create(path)?;
 
         Self::init_tables(&db)?;
 
         Ok(Self {
-            latest,
             db
         })
     }
@@ -107,7 +100,7 @@ impl Blockchain {
             Contract::JOB(jobctr) => {
 
                 // Get block referenced by Job contract
-                let Some(_) = self.find_block(&jobctr.get_blk_hdr().id())
+                let Some(_) = self.get_block_by_id(&jobctr.get_blk_hdr().id())
                     .expect("Error encountered finding block from database") 
                 else {
                     return Err(format!(
@@ -150,7 +143,7 @@ impl Blockchain {
 // Getter methods
 impl Blockchain {
     // Find block using ID
-    pub fn find_block(&self, id: &[u8]) -> StdResult<Option<Block>>  {
+    pub fn get_block_by_id(&self, id: &[u8]) -> StdResult<Option<Block>> {
         let read_txn = self.db.begin_read()?;
 
         // If block does not exist, return None
@@ -166,21 +159,21 @@ impl Blockchain {
         )
     }
 
-    // latest block_headers
-    pub fn latest_hdrs(&self) -> &VecDeque<ID> {
-        &self.latest
-    } 
+    /// Get block by epoch
+    pub fn get_block_by_epoch(&self, epoch: u64) -> StdResult<Option<Block>> {
+        let read_txn = self.db.begin_read()?;
 
-    // Latest header
-    pub fn latest_hdr_id(&self) -> &ID {
-        self.latest
-            .back()
-            .expect(
-                "Error: Blockchain has no Blocks, genesis block is missing!"
-            )
+        // Get block id from epoch table if it exists
+        let Some(block_id) = read_txn.open_table(EPOCHS)?
+            .get(epoch)?
+        else {
+            return Ok(None)
+        };
+
+        self.get_block_by_id(block_id.value())
     }
 
-    
+    // Latest block entry in the blockchain
     fn latest_epoch_entry(&self) -> StdResult<(u64, ID)>  {
         let epoch = self.db
             .begin_read()?
@@ -204,21 +197,18 @@ impl Blockchain {
         Ok(len + 1)
     }
 
-    /// Return the latest block
+    /// Returns the latest block
+    /// 
+    /// Also: the prev block id can be gotten from the latest
+    /// block header
     pub fn latest_block(&self) -> StdResult<Block> {
         // Block id
         let (_, blk_id) = self.latest_epoch_entry()?;
 
-        // Get block from BLOCKS table useing id
-        let block = self.db
-            .begin_read()?
-            .open_table(BLOCKS)?;
+        let block = self.get_block_by_id(blk_id.as_slice())?
+            .expect("Error: Blockchain should have at least genesis block");
 
-        // Get latest block bytes
-        let block_bytes = block.get(blk_id.as_slice())?
-            .expect("Illegal: Latest block is not in chain");
-
-        Ok(Block::from(block_bytes.value())?)
+        Ok(block)
     }
 
     // Total goldcoin in existence
@@ -236,12 +226,24 @@ impl Blockchain {
 
         Ok(WU::try_from(int).unwrap())
     }
+
+    /// # Blockchain Iterator
+    /// 
+    /// Iterates through the `Blockchain` by taking as input an epoch, 
+    /// and returning the epoch `Block` followed by the next until
+    /// when the `Blockchain` reaches the tip, the iterator returns `None`
+    pub fn iter(&self, epoch: u64) -> impl Iterator<Item = Block> {
+        BlockChainIterator {
+            epoch,
+            chain: &self,
+        }
+    }
 }
 
 // Setter methods
 impl Blockchain {
     // Add to file
-    fn add_to_file(&mut self, blk: Block) -> StdResult<()> {
+    fn add_to_db(&mut self, blk: Block) -> StdResult<()> {
         let write_txn = self.db.begin_write()?;
 
         {
@@ -268,18 +270,6 @@ impl Blockchain {
         Ok(())
     }
 
-
-    // Append header to chain
-    fn append_to_chain(&mut self, hdr: &BlockHeader) {
-
-        // Update latest header
-        if self.latest.len() == 2 {
-            self.latest.pop_front();
-        }
-
-        self.latest.push_back(hdr.id());
-    }
-
     /// Add a new block to the Blockchain
     /// A new BlockHeader instance is created and stored
     /// in memory by the Blockchain
@@ -291,17 +281,36 @@ impl Blockchain {
         // Confirm and validate block
         self.validate_block(&block)?;
 
-        // TODO: Store block in file
-        self.append_to_chain(block.header());
-
         // Add block to db
-        self.add_to_file(block)
+        self.add_to_db(block)
             .expect("Error: Block could not be added to chain");
 
         Ok(())
     }
 
     // TODO: Add received finalized block to mempool
+}
+
+// Iterator struct for blockchain
+// to iterate through blocks
+struct BlockChainIterator<'a> {
+    epoch: u64,
+    chain: &'a Blockchain
+}
+
+impl<'a> Iterator for BlockChainIterator<'a> {
+    type Item = Block;
+
+    // Returns next block
+    fn next(&mut self) -> Option<Self::Item> {
+        let block_option = self.chain
+            .get_block_by_epoch(self.epoch)
+            .expect("Error iterating through blockchain");
+
+        self.epoch += 1;
+
+        block_option
+    }
 }
 
 
@@ -390,7 +399,7 @@ use marketplace_wallet::Owner;
         let path = test_db("add_empty_block");
         let mut chain = Blockchain::init(&path)?;
 
-        let block = Block::new(&BlockHeader::genesis(), vec![]);
+        let block = Block::new(Block::genesis().header(), vec![]);
 
         chain.add_block(block)?;
 
@@ -400,7 +409,7 @@ use marketplace_wallet::Owner;
         Ok(())
     }
 
-    // TODO: Test adding a normal block to the chain
+    // Add a valid transaction block to the chain.
     #[test]
     fn add_normal_block_to_blockchain() -> StdResult<()> {
         // Owner in contract
@@ -410,7 +419,7 @@ use marketplace_wallet::Owner;
         let mut chain = Blockchain::init(&path)?;
 
         let block = Block::new(
-            &BlockHeader::genesis(), 
+            Block::genesis().header(), 
             vec![ctr(&owner, &owner)]
         );
 
@@ -422,13 +431,14 @@ use marketplace_wallet::Owner;
         Ok(())
     }
 
+    // Reject a block whose epoch is already present in the chain.
     #[test]
     fn rejects_block_for_an_existing_epoch() -> StdResult<()> {
         let path = test_db("rejects_existing_epoch");
         let mut chain = Blockchain::init(&path)?;
 
-        chain.add_block(Block::new(&BlockHeader::genesis(), vec![]))?;
-        let duplicate_epoch = Block::new(&BlockHeader::genesis(), vec![]);
+        chain.add_block(Block::new(Block::genesis().header(), vec![]))?;
+        let duplicate_epoch = Block::new(Block::genesis().header(), vec![]);
 
         let error = chain.add_block(duplicate_epoch).unwrap_err();
         assert!(error.contains("expected block"));
@@ -437,12 +447,13 @@ use marketplace_wallet::Owner;
         Ok(())
     }
 
+    // Reject a block containing a transaction contract that fails verification.
     #[test]
     fn rejects_invalid_transaction_contract() -> StdResult<()> {
         let path = test_db("rejects_invalid_transaction");
         let chain = Blockchain::init(&path)?;
         let invalid_contract = Contract::TX(TxContract::new(vec![Tx::genesis()]));
-        let block = Block::new(&BlockHeader::genesis(), vec![invalid_contract]);
+        let block = Block::new(Block::genesis().header(), vec![invalid_contract]);
 
         let error = chain.validate_block(&block).unwrap_err();
         assert!(!error.is_empty());
@@ -451,6 +462,7 @@ use marketplace_wallet::Owner;
         Ok(())
     }
 
+    // Preserve blocks and chain metadata when the database is reopened.
     #[test]
     fn persists_blocks_and_total_gdc_after_reopen() -> StdResult<()> {
         let path = test_db("persists_blocks");
@@ -458,7 +470,7 @@ use marketplace_wallet::Owner;
 
         {
             let mut chain = Blockchain::init(&path)?;
-            let block = Block::new(&BlockHeader::genesis(), vec![]);
+            let block = Block::new(Block::genesis().header(), vec![]);
             block_id = block.id();
             chain.add_block(block)?;
 
@@ -469,33 +481,79 @@ use marketplace_wallet::Owner;
         let chain = Blockchain::init(&path)?;
         assert_eq!(chain.len()?, 2);
         assert_eq!(chain.latest_block()?.id(), block_id);
-        assert!(chain.find_block(&block_id)?.is_some());
+        assert!(chain.get_block_by_id(&block_id)?.is_some());
 
         fs::remove_file(path)?;
         Ok(())
     }
 
+    // Iterate from the genesis epoch through every block in ascending order.
     #[test]
-    fn keeps_only_the_two_latest_header_ids() -> StdResult<()> {
-        let path = test_db("latest_headers");
+    fn iterates_from_genesis_to_tip() -> StdResult<()> {
+        let path = test_db("iterates_from_genesis");
         let mut chain = Blockchain::init(&path)?;
 
-        let first = Block::new(&BlockHeader::genesis(), vec![]);
-        let first_id = first.id();
-        chain.add_block(first)?;
+        chain.add_block(Block::new(chain.latest_block()?.header(), vec![]))?;
+        chain.add_block(Block::new(chain.latest_block()?.header(), vec![]))?;
 
-        let second = Block::new(&chain.latest_block()?.header().clone(), vec![]);
-        let second_id = second.id();
-        chain.add_block(second)?;
+        let block_ids: Vec<ID> = chain.iter(0).map(|block| block.id()).collect();
+        let expected_ids: Vec<ID> = (0..chain.len()?)
+            .map(|epoch| chain.get_block_by_epoch(epoch).unwrap().unwrap().id())
+            .collect();
 
-        let third = Block::new(&chain.latest_block()?.header().clone(), vec![]);
-        let third_id = third.id();
-        chain.add_block(third)?;
+        assert_eq!(block_ids, expected_ids);
+        assert_eq!(block_ids.len(), 3);
 
-        assert_eq!(chain.latest_hdrs().len(), 2);
-        assert_eq!(chain.latest_hdrs()[0], second_id);
-        assert_eq!(chain.latest_hdrs()[1], third_id);
-        assert_ne!(chain.latest_hdrs()[0], first_id);
+        fs::remove_file(path)?;
+        Ok(())
+    }
+
+    // Start iteration at a later epoch and stop when the chain tip is reached.
+    #[test]
+    fn iterator_can_start_at_a_nonzero_epoch() -> StdResult<()> {
+        let path = test_db("iterator_nonzero_start");
+        let mut chain = Blockchain::init(&path)?;
+
+        chain.add_block(Block::new(chain.latest_block()?.header(), vec![]))?;
+        chain.add_block(Block::new(chain.latest_block()?.header(), vec![]))?;
+
+        let epoch_one_id = chain.get_block_by_epoch(1)?.unwrap().id();
+        let epoch_two_id = chain.get_block_by_epoch(2)?.unwrap().id();
+        let blocks: Vec<Block> = chain.iter(1).collect();
+
+        assert_eq!(blocks.len(), 2);
+        assert_eq!(blocks[0].id(), epoch_one_id);
+        assert_eq!(blocks[1].id(), epoch_two_id);
+
+        fs::remove_file(path)?;
+        Ok(())
+    }
+
+    // Return no blocks when iteration begins beyond the current chain tip.
+    #[test]
+    fn iterator_returns_none_after_the_tip() -> StdResult<()> {
+        let path = test_db("iterator_after_tip");
+        let chain = Blockchain::init(&path)?;
+
+        assert!(chain.iter(chain.len()?).next().is_none());
+        assert!(chain.get_block_by_epoch(1)?.is_none());
+
+        fs::remove_file(path)?;
+        Ok(())
+    }
+
+    // Return the expected block for an existing epoch and none for a missing epoch.
+    #[test]
+    fn gets_blocks_by_epoch() -> StdResult<()> {
+        let path = test_db("get_block_by_epoch");
+        let mut chain = Blockchain::init(&path)?;
+        let next_block = Block::new(chain.latest_block()?.header(), vec![]);
+        let next_block_id = next_block.id();
+        chain.add_block(next_block)?;
+
+        assert_eq!(chain.get_block_by_epoch(0)?.unwrap().id(), Block::genesis().id());
+        assert_eq!(chain.get_block_by_epoch(1)?.unwrap().id(), next_block_id);
+        assert!(chain.get_block_by_epoch(2)?.is_none());
 
         fs::remove_file(path)?;
         Ok(())
