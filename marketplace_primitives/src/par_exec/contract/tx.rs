@@ -108,4 +108,68 @@ use super::*;
 
         txctr.verify()
     }
+
+    // A transaction contract should preserve the transactions supplied to it.
+    #[test]
+    fn transaction_contract_gets_transactions() {
+        let owner = Owner::new_sig();
+        let amount = WU::try_from(20000).unwrap();
+        let tx = Tx::new(
+            0,
+            TxIdentifier::COIN,
+            Some(vec![TxIO::new(owner.as_lock(), amount)]),
+            Some(vec![TxIO::new(owner.as_lock(), amount)]),
+        );
+        let contract = TxContract::new(vec![tx.clone()]);
+
+        assert_eq!(contract.get_tx().len(), 1);
+        assert_eq!(contract.get_tx()[0], tx);
+    }
+
+    // Duplicate transaction-contract authentication should require force to replace it.
+    #[test]
+    fn transaction_contract_auth_can_be_replaced() -> AgentResult<()> {
+        let owner = Owner::new_sig();
+        let mut contract = TxContract::new(Vec::new());
+        let first_key = owner.sign(&contract.id());
+        let second_key = owner.sign(&contract.id());
+
+        contract.add_auth(owner.as_lock(), first_key, false)?;
+        let err = contract
+            .add_auth(owner.as_lock(), second_key, false)
+            .unwrap_err();
+        assert!(err.starts_with("Key already exists for Lock ID "));
+        contract.add_auth(
+            owner.as_lock(),
+            owner.sign(&contract.id()),
+            true,
+        )
+    }
+
+    // Verification should fail when a transaction contract lacks input authentication.
+    #[test]
+    fn transaction_contract_requires_authentication() {
+        let owner = Owner::new_sig();
+        let amount = WU::try_from(20000).unwrap();
+        let tx = Tx::new(
+            0,
+            TxIdentifier::COIN,
+            Some(vec![TxIO::new(owner.as_lock(), amount)]),
+            Some(vec![TxIO::new(owner.as_lock(), amount)]),
+        );
+        let contract = TxContract::new(vec![tx]);
+
+        let err = contract.verify().unwrap_err();
+        assert!(err.contains("Error: Key does not exist for input"));
+    }
+
+    // Genesis transaction contracts should contain the native and token genesis transactions.
+    #[test]
+    fn genesis_transaction_contract_contains_two_transactions() {
+        let contract = TxContract::genesis();
+
+        assert_eq!(contract.get_tx().len(), 2);
+        assert!(contract.get_tx()[0].is_coin());
+        assert!(!contract.get_tx()[1].is_coin());
+    }
 }

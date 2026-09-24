@@ -454,7 +454,7 @@ impl Verify for Tx {
 
 #[cfg(test)]
 mod tests {
-    use std::{assert_eq, panic, vec};
+    use std::{assert_eq, collections::HashMap, panic, vec};
 
 use marketplace_helpers::{functions::dum_bytes};
 use marketplace_wallet::{Owner};
@@ -607,7 +607,7 @@ use super::*;
 
         let opt = ctr.opts.get(0).unwrap();
 
-        assert_eq!(opt.amount(), WU::try_from(300000000000000).unwrap());
+        assert_eq!(opt.amount(), WU::GDC());
     }
 
     // Add input to tx
@@ -633,5 +633,54 @@ use super::*;
         assert_eq!(tx.ipts().len(), 1);
 
         Ok(())
+    }
+
+    // Transaction accessors should report inputs, outputs, sums, and fees.
+    #[test]
+    fn transaction_accessors_and_sums() {
+        let owner = Owner::new_sig();
+        let amount = WU::try_from(20000).unwrap();
+        let input = TxIO::new(owner.as_lock(), amount);
+        let output = TxIO::new(owner.as_lock(), amount);
+        let fee = TxIO::new(Lock::ACCOUNT(Tx::gtt_tid()), WU::try_from(10).unwrap());
+        let tx = Tx::new(
+            1,
+            TxIdentifier::COIN,
+            Some(vec![input]),
+            Some(vec![output, fee]),
+        );
+
+        assert!(tx.is_coin());
+        assert_eq!(tx.ipt_sum(), amount);
+        assert_eq!(tx.opt_sum(), amount + WU::try_from(10).unwrap());
+        assert_eq!(tx.fees(), WU::try_from(10).unwrap());
+        assert_eq!(tx.first_opt().unwrap().amount(), amount);
+        assert_eq!(tx.ipts().len(), 1);
+        assert_eq!(tx.opts().len(), 2);
+    }
+
+    // New account transactions should expose their token identity and validate.
+    #[test]
+    fn new_account_transaction_has_token_identity() -> AgentResult<()> {
+        let owner = Owner::new_sig();
+        let output = TxIO::new(owner.as_lock(), WU::try_from(20000).unwrap());
+        let tx = Tx::new_acc(1, Some(vec![output]));
+
+        assert!(!tx.is_coin());
+        assert!(tx.is_new_acc());
+        assert!(matches!(tx.tid(), TxIdentifier::TOKEN(Some(_))));
+        tx.verify()
+    }
+
+    // Transaction unlocking should report a missing key for an input.
+    #[test]
+    fn transaction_unlock_requires_each_input_key() {
+        let owner = Owner::new_sig();
+        let input = TxIO::new(owner.as_lock(), WU::try_from(20000).unwrap());
+        let tx = Tx::new(1, TxIdentifier::COIN, Some(vec![input]), None);
+        let auth = HashMap::new();
+
+        let err = tx.unlock(&auth, &tx.id()).unwrap_err();
+        assert!(err.contains("Error: Key does not exist for input"));
     }
 }

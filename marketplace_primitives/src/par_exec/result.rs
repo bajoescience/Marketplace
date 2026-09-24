@@ -296,6 +296,111 @@ mod tests {
         )
     }
 
+    // Result metadata and vote identity should be exposed consistently.
+    #[test]
+    fn result_metadata_and_vote_identity() {
+        let owner = Owner::new_sig();
+        let result_hash = [7u8; 32];
+        let work_id = [8u8; 32];
+        let address = [9u8; 32];
+        let spent = WorkSize::build(WU::try_from(20000).unwrap()).unwrap();
+        let result = ResultInfo::new(result_hash, spent);
+        let proof = wr_proof(&owner, [2; 32]);
+        let result_ptr = ResultPtr::new(
+            work_id,
+            result,
+            proof,
+            address,
+            owner.as_wr_lock(),
+        );
+
+        assert_eq!(result_ptr.work_id(), work_id);
+        assert_eq!(result_ptr.result().opt_hash(), result_hash);
+        assert_eq!(
+            result_ptr.result().spent().into(),
+            spent.into()
+        );
+        assert_eq!(result_ptr.res_addr(), &address);
+        assert_eq!(result_ptr.witness(), owner.as_wr_lock());
+        assert_eq!(result_ptr.as_vote(), result_ptr.result().id());
+    }
+
+    // Result pointers with matching result information should be compatible.
+    #[test]
+    fn result_pointers_compare_result_information() {
+        let owner = Owner::new_sig();
+        let spent = WorkSize::build(WU::try_from(20000).unwrap()).unwrap();
+        let result = ResultInfo::new([4u8; 32], spent);
+        let proof = wr_proof(&owner, [2; 32]);
+        let first = ResultPtr::new(
+            [1u8; 32],
+            result.clone(),
+            proof.clone(),
+            [2u8; 32],
+            owner.as_wr_lock(),
+        );
+        let matching = ResultPtr::new(
+            [3u8; 32],
+            result,
+            proof.clone(),
+            [4u8; 32],
+            owner.as_wr_lock(),
+        );
+        let different = ResultPtr::new(
+            [5u8; 32],
+            ResultInfo::new([6u8; 32], spent),
+            proof,
+            [7u8; 32],
+            owner.as_wr_lock(),
+        );
+
+        assert!(first.is_same(&matching));
+        assert!(!first.is_same(&different));
+    }
+
+    // Duplicate authentication is rejected unless replacement is forced.
+    #[test]
+    fn result_pointer_auth_can_be_replaced_when_forced() -> AgentResult<()> {
+        let owner = Owner::new_sig();
+        let replacement_owner = Owner::new_sig();
+        let spent = WorkSize::build(WU::try_from(20000).unwrap()).unwrap();
+        let mut result_ptr = res_ptr(
+            spent,
+            &owner,
+            wr_proof(&owner, [2; 32]),
+        );
+        let valid_key = owner.sign(&result_ptr.id());
+        let replacement_key = replacement_owner.sign(&result_ptr.id());
+
+        result_ptr.add_auth(owner.as_wr_lock(), valid_key, false)?;
+        let err = result_ptr
+            .add_auth(owner.as_wr_lock(), replacement_key, false)
+            .unwrap_err();
+        assert!(err.starts_with("Key already exists for Lock ID "));
+
+        result_ptr.add_auth(
+            owner.as_wr_lock(),
+            owner.sign(&result_ptr.id()),
+            true,
+        )?;
+        result_ptr.verify()
+    }
+
+    // Result verification requires authentication for the witness lock.
+    #[test]
+    fn result_pointer_requires_witness_authentication() {
+        let owner = Owner::new_sig();
+        let spent = WorkSize::build(WU::try_from(20000).unwrap()).unwrap();
+        let result_ptr = res_ptr(
+            spent,
+            &owner,
+            wr_proof(&owner, [2; 32]),
+        );
+
+        let err = result_ptr.verify().unwrap_err();
+        assert!(err.contains("Error: Key does not exist for workptr"));
+    }
+
     // correct usage of Resptr API
     #[test]
     fn test_res_ptr() -> AgentResult<()> {

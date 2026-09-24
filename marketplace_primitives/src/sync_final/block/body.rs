@@ -175,4 +175,36 @@ use crate::{BlockHeader, JobContract};
         assert_eq!(block.wr_avg(), WHITEROOM_SIZE);
         Ok(())
     }
+
+    // An empty block body should have no contracts, no total, and no Merkle root.
+    #[test]
+    fn empty_body_has_empty_aggregates() {
+        let body = BlockBody::new(Vec::new());
+
+        assert_eq!(body.body().len(), 0);
+        assert_eq!(body.len(), 0);
+        assert_eq!(body.total(), WU::default());
+        assert_eq!(body.root(), None);
+    }
+
+    // A genesis body should expose its genesis contract through the body slice.
+    #[test]
+    fn genesis_body_exposes_genesis_contract() {
+        let body = BlockBody::genesis();
+
+        assert_eq!(body.len(), 1);
+        assert_eq!(body.body().len(), 1);
+        assert!(matches!(body.body()[0], Contract::TX(_)));
+        assert!(body.root().is_some());
+    }
+
+    // The body root should change when its contract list changes.
+    #[test]
+    fn body_root_depends_on_contracts() -> AgentResult<()> {
+        let first = BlockBody::new(vec![Contract::TX(crate::TxContract::new(Vec::new()))]);
+        let second = BlockBody::new(vec![Contract::genesis()]);
+
+        assert_ne!(first.root(), second.root());
+        Ok(())
+    }
 }

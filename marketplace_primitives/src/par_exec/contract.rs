@@ -157,4 +157,39 @@ use marketplace_helpers::objects::{AgentResult, WHITEROOM_SIZE};
         let ctr = Contract::TX(txctr()?);
         ctr.verify()
     }
+
+    // Genesis should create a transaction contract containing the initial ledgers.
+    #[test]
+    fn genesis_contract_contains_initial_transactions() {
+        let contract = Contract::genesis();
+
+        let tx_contract = match contract {
+            Contract::TX(tx_contract) => tx_contract,
+            Contract::JOB(_) => panic!("Genesis contract must be a transaction contract"),
+        };
+
+        assert_eq!(tx_contract.get_tx().len(), 2);
+        assert!(tx_contract.get_tx()[0].is_coin());
+        assert!(!tx_contract.get_tx()[1].is_coin());
+    }
+
+    // Contract identifiers should delegate to the wrapped contract type.
+    #[test]
+    fn contract_identifier_delegates_to_inner_contract() -> AgentResult<()> {
+        let tx_contract = txctr()?;
+        let expected_id = tx_contract.id();
+        let contract = Contract::TX(tx_contract);
+
+        assert_eq!(contract.ctr_id(), expected_id);
+        Ok(())
+    }
+
+    // Transaction contracts do not create newly issued goldcoin.
+    #[test]
+    fn transaction_contract_has_no_new_coins() -> AgentResult<()> {
+        let contract = Contract::TX(txctr()?);
+
+        assert_eq!(contract.new_coins(), WU::default());
+        Ok(())
+    }
 }

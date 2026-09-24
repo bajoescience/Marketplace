@@ -443,7 +443,7 @@ use marketplace_wallet::Owner;
         let duplicate_epoch = Block::new(Block::genesis().header(), vec![]);
 
         let error = chain.add_block(duplicate_epoch).unwrap_err();
-        assert!(error.contains("expected block"));
+        assert!(error.contains("Block header does not match expected"));
 
         fs::remove_file(path)?;
         Ok(())
@@ -556,6 +556,87 @@ use marketplace_wallet::Owner;
         assert_eq!(chain.get_block_by_epoch(0)?.unwrap().id(), Block::genesis().id());
         assert_eq!(chain.get_block_by_epoch(1)?.unwrap().id(), next_block_id);
         assert!(chain.get_block_by_epoch(2)?.is_none());
+
+        fs::remove_file(path)?;
+        Ok(())
+    }
+
+    // Return no block when a requested block ID is absent from the database.
+    #[test]
+    fn returns_none_for_unknown_block_id() -> StdResult<()> {
+        let path = test_db("unknown_block_id");
+        let chain = Blockchain::init(&path)?;
+
+        assert!(chain.get_block_by_id(&[42u8; 32])?.is_none());
+
+        fs::remove_file(path)?;
+        Ok(())
+    }
+
+    // Treat the latest block and its predecessor as recent, but not older blocks.
+    #[test]
+    fn tracks_recent_blocks() -> StdResult<()> {
+        let path = test_db("tracks_recent_blocks");
+        let mut chain = Blockchain::init(&path)?;
+        let genesis_id = chain.latest_block()?.id();
+
+        assert!(chain.is_recent(genesis_id)?);
+        assert!(!chain.is_recent([42u8; 32])?);
+
+        chain.add_block(Block::new(chain.latest_block()?.header(), vec![]))?;
+        let first_id = chain.latest_block()?.id();
+        chain.add_block(Block::new(chain.latest_block()?.header(), vec![]))?;
+        let second_id = chain.latest_block()?.id();
+
+        assert!(chain.is_recent(second_id)?);
+        assert!(chain.is_recent(first_id)?);
+        assert!(!chain.is_recent(genesis_id)?);
+
+        fs::remove_file(path)?;
+        Ok(())
+    }
+
+    // Validate a block against the current tip before it is persisted.
+    #[test]
+    fn validates_block_against_latest_tip() -> StdResult<()> {
+        let path = test_db("validates_latest_tip");
+        let chain = Blockchain::init(&path)?;
+        let block = Block::new(chain.latest_block()?.header(), vec![]);
+
+        chain.validate_block(&block)?;
+
+        fs::remove_file(path)?;
+        Ok(())
+    }
+
+    // Reject a block whose header was built from a stale previous block.
+    #[test]
+    fn rejects_block_built_from_stale_tip() -> StdResult<()> {
+        let path = test_db("rejects_stale_tip");
+        let mut chain = Blockchain::init(&path)?;
+        chain.add_block(Block::new(chain.latest_block()?.header(), vec![]))?;
+
+        let stale_block = Block::new(Block::genesis().header(), vec![]);
+        let error = chain.validate_block(&stale_block).unwrap_err();
+
+        assert_eq!(error, "Error: Block header does not match expected");
+
+        fs::remove_file(path)?;
+        Ok(())
+    }
+
+    // Reinitializing an existing database should preserve its current chain.
+    #[test]
+    fn reinitialization_does_not_reset_existing_chain() -> StdResult<()> {
+        let path = test_db("reinitialization");
+
+        {
+            let mut chain = Blockchain::init(&path)?;
+            chain.add_block(Block::new(chain.latest_block()?.header(), vec![]))?;
+        }
+
+        let chain = Blockchain::init(&path)?;
+        assert_eq!(chain.len()?, 2);
 
         fs::remove_file(path)?;
         Ok(())

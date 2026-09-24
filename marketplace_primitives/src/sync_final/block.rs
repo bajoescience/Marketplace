@@ -95,7 +95,7 @@ impl Block {
         // Compare headers
         if self.id() != blk_hdr.id() {
             return Err(format!(
-                "Error: Block header is the prev header"
+                "Error: Block header does not match expected"
             ))
         }
 
@@ -118,5 +118,49 @@ use super::*;
         let genesis = Block::genesis();
 
         assert_eq!(genesis.header().new_gdc(), WU::GDC());
+    }
+
+    // A newly constructed block should expose its previous-header linkage and body.
+    #[test]
+    fn new_block_exposes_header_and_body() {
+        let previous = BlockHeader::genesis();
+        let block = Block::new(&previous, Vec::new());
+
+        assert_eq!(block.body().len(), 0);
+        assert_eq!(block.header().epoch(), previous.epoch() + 1);
+        assert_eq!(block.header().prev(), previous.id());
+        assert_eq!(block.id(), block.header().id());
+    }
+
+    // Serialized blocks should deserialize back to an equivalent block.
+    #[test]
+    fn block_serialization_round_trip() -> Result<(), std::io::Error> {
+        let block = Block::genesis();
+        let restored = Block::from(&block.serialize())?;
+
+        assert_eq!(restored.id(), block.id());
+        assert_eq!(restored.body().len(), block.body().len());
+        assert_eq!(restored.gdc(), block.gdc());
+        Ok(())
+    }
+
+    // Block validation should accept the header used to construct the block.
+    #[test]
+    fn block_validates_against_previous_header() -> AgentResult<()> {
+        let previous = BlockHeader::genesis();
+        let block = Block::new(&previous, Vec::new());
+
+        block.validate(&previous)
+    }
+
+    // Block validation should reject a different previous header.
+    #[test]
+    fn block_rejects_wrong_previous_header() {
+        let previous = BlockHeader::genesis();
+        let block = Block::new(&previous, Vec::new());
+        let wrong_previous = BlockHeader::new(&previous, &BlockBody::new(Vec::new()));
+
+        let err = block.validate(&wrong_previous).unwrap_err();
+        assert_eq!(err, "Error: Block header is the prev header");
     }
 }

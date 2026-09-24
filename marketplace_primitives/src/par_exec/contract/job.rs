@@ -178,7 +178,7 @@ pub mod tests {
 use marketplace_helpers::{functions::{dum_bytes, wr_seed}, objects::{IdHash, WHITEROOM_SIZE, WU, WorkSize}};
 use marketplace_wallet::{Owner, crypto::Crypto};
 
-use crate::{BlockHeader, par_exec::{ExecuteTime, ResultInfo}};
+use crate::{BlockHeader, par_exec::{ExecuteTime, ResultInfo}, sync_final::block::BlockBody};
 
 use super::*;
 
@@ -323,5 +323,80 @@ use super::*;
         // Contract should be validated and verified
         ctr.validate_all()?;
         ctr.verify()
+    }
+
+    // A new job contract should expose its input and an empty result set.
+    #[test]
+    fn new_job_contract_exposes_input_and_empty_output() {
+        let owner = Owner::new_sig();
+        let block_header = blk_hdr();
+        let work_ptr = workptr(&owner, block_header.id());
+        let contract = JobContract::new(work_ptr.clone(), block_header.clone());
+
+        assert_eq!(contract.work_id(), work_ptr.id());
+        assert_eq!(contract.wr_len(), 0);
+        assert_eq!(contract.input().id(), work_ptr.id());
+        assert_eq!(contract.get_blk_hdr().id(), block_header.id());
+        assert!(contract.output().members().next().is_none());
+        assert!(contract.first_result().is_none());
+    }
+
+    // Job block-header matching should accept the referenced header only.
+    #[test]
+    fn job_contract_matches_only_its_input_block_header() {
+        let owner = Owner::new_sig();
+        let block_header = blk_hdr();
+        let contract = JobContract::new(
+            workptr(&owner, block_header.id()),
+            block_header.clone(),
+        );
+        let other_header = BlockHeader::new(&block_header, &BlockBody::genesis());
+
+        assert!(contract.is_same_blk_hdr(&block_header));
+        assert!(!contract.is_same_blk_hdr(&other_header));
+    }
+
+    // Adding a valid result should update the result count and first-result accessor.
+    #[test]
+    fn adding_result_updates_job_contract() -> AgentResult<()> {
+        let input_owner = Owner::new_sig();
+        let result_owner = Owner::new_sig();
+        let block_header = blk_hdr();
+        let mut contract = JobContract::new(
+            workptr(&input_owner, block_header.id()),
+            block_header.clone(),
+        );
+        let result = resultptr(
+            contract.work_id(),
+            &result_owner,
+            block_header.vdf_diff(),
+        );
+        let result_id = result.id();
+
+        assert_eq!(contract.add_result(result)?, 1);
+        assert_eq!(contract.wr_len(), 1);
+        assert_eq!(contract.first_result().unwrap().id(), result_id);
+        assert_eq!(contract.new_gdc(), WU::default());
+        Ok(())
+    }
+
+    // Results for another work pointer must be rejected by the job contract.
+    #[test]
+    fn job_contract_rejects_wrong_work_pointer_reference() {
+        let input_owner = Owner::new_sig();
+        let result_owner = Owner::new_sig();
+        let block_header = blk_hdr();
+        let mut contract = JobContract::new(
+            workptr(&input_owner, block_header.id()),
+            block_header.clone(),
+        );
+        let result = resultptr(
+            [99u8; 32],
+            &result_owner,
+            block_header.vdf_diff(),
+        );
+
+        let err = contract.add_result(result).unwrap_err();
+        assert_eq!(err, "Error: Invalid WorkPtr Reference");
     }
 }

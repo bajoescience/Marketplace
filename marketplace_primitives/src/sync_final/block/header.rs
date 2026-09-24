@@ -130,3 +130,55 @@ impl WRVote for BlockHeader {
         self.id()
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use marketplace_helpers::objects::IdHash;
+
+    use crate::sync_final::block::BlockBody;
+
+    use super::*;
+
+    // Genesis headers should initialize the chain at epoch zero.
+    #[test]
+    fn genesis_header_has_initial_values() {
+        let header = BlockHeader::genesis();
+
+        assert_eq!(header.epoch(), 0);
+        assert_eq!(header.prev(), [0u8; 32]);
+        assert_eq!(header.new_gdc(), WU::GDC());
+        assert_eq!(header.average(), WU::single());
+        assert_eq!(header.vrf_t(), [255u8; 32]);
+        assert_eq!(header.as_vote(), header.id());
+    }
+
+    // A new header should reference its previous header and body-derived values.
+    #[test]
+    fn new_header_references_previous_header_and_body() {
+        let previous = BlockHeader::genesis();
+        let body = BlockBody::new(Vec::new());
+        let header = BlockHeader::new(&previous, &body);
+
+        assert_eq!(header.epoch(), previous.epoch() + 1);
+        assert_eq!(header.prev(), previous.id());
+        assert_eq!(header.new_gdc(), body.total());
+        assert_eq!(
+            header.vrf_t(),
+            functions::get_vrf(body.wr_avg(), previous.vrf_t())
+        );
+    }
+
+    // Rebuilding a header from the same previous header and body should be deterministic.
+    #[test]
+    fn header_construction_is_deterministic() {
+        let previous = BlockHeader::genesis();
+        let body = BlockBody::new(Vec::new());
+
+        let first = BlockHeader::new(&previous, &body);
+        let second = BlockHeader::new(&previous, &body);
+
+        assert_eq!(first, second);
+        assert_eq!(first.id(), second.id());
+        assert_eq!(first.vdf_diff(), second.vdf_diff());
+    }
+}

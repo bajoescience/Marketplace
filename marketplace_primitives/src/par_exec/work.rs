@@ -287,5 +287,78 @@ use super::*;
 
         work_ptr.verify()
     }
+
+    // Work pointer getters should return the values supplied at construction.
+    #[test]
+    fn work_pointer_getters() {
+        let owner = Owner::new_sig();
+        let work_addr = [1u8; 32];
+        let blk_hdr = [2u8; 32];
+        let size = WorkSize::build(WU::try_from(20000).unwrap()).unwrap();
+        let work_ptr = WorkPtr::new(
+            work_addr,
+            size,
+            owner.as_wr_lock(),
+            blk_hdr,
+            ExecuteTime::AFTER(10),
+        );
+
+        assert_eq!(work_ptr.work_addr(), &work_addr);
+        assert_eq!(work_ptr.work_size().into(), size.into());
+        assert_eq!(work_ptr.emp_wr(), &owner.as_wr_lock());
+        assert_eq!(work_ptr.blk_hdr(), &blk_hdr);
+        assert!(matches!(work_ptr.do_at(), ExecuteTime::AFTER(10)));
+    }
+
+    // Authentication with the same lock must be rejected unless forced.
+    #[test]
+    fn work_pointer_auth_can_be_replaced_when_forced() -> AgentResult<()> {
+        let owner = Owner::new_sig();
+        let replacement_owner = Owner::new_sig();
+        let mut work_ptr = WorkPtr::new(
+            [1u8; 32],
+            WorkSize::build(WU::try_from(20000).unwrap()).unwrap(),
+            owner.as_wr_lock(),
+            [2u8; 32],
+            ExecuteTime::NOW,
+        );
+
+        work_ptr.add_auth(
+            owner.as_wr_lock(),
+            owner.sign(&work_ptr.id()),
+            false,
+        )?;
+        let err = work_ptr
+            .add_auth(
+                owner.as_wr_lock(),
+                replacement_owner.sign(&work_ptr.id()),
+                false,
+            )
+            .unwrap_err();
+        assert!(err.starts_with("Key already exists for Lock ID "));
+
+        work_ptr.add_auth(
+            owner.as_wr_lock(),
+            owner.sign(&work_ptr.id()),
+            true,
+        )?;
+        work_ptr.verify()
+    }
+
+    // Work pointer verification must fail when no authentication is supplied.
+    #[test]
+    fn work_pointer_requires_authentication() {
+        let owner = Owner::new_sig();
+        let work_ptr = WorkPtr::new(
+            [1u8; 32],
+            WorkSize::build(WU::try_from(20000).unwrap()).unwrap(),
+            owner.as_wr_lock(),
+            [2u8; 32],
+            ExecuteTime::NOW,
+        );
+
+        let err = work_ptr.verify().unwrap_err();
+        assert!(err.contains("Error: Key does not exist for workptr"));
+    }
     
 }
