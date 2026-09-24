@@ -121,34 +121,11 @@ impl Blockchain {
             self.validate_contract(ctr)?;
         }
 
-        // Ensure block epoch is the next chain epoch
-        let Ok(chain_len) = self.len() else {
-            return Err(format!(
-                "Error: Chain length could not be fetched"
-            ));
-        };
+        // Validate block header using previous block
+        let prev_block = self.latest_block()
+            .expect("Latest block could not be fetched");
 
-        if block.header().epoch() != chain_len {
-            return Err(format!(
-                "Error: Block of epoch {} is the expected block, not {}",
-                chain_len,
-                block.header().epoch()
-            ))
-        }
-
-        // Ensure block references the last block
-        let current = self.latest_block()
-            .expect("Error: Latest block does not exist");
-
-        if block.header().prev() != current.id() {
-            return Err(format!(
-                "Error: Block {} does not reference previous block {}",
-                functions::from_bytes(&block.id()),
-                functions::from_bytes(&current.id())
-            ));
-        }
-
-        Ok(())
+        block.validate(prev_block.header())
     }
 }
 

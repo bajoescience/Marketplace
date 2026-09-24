@@ -1,10 +1,12 @@
 mod header;
 mod body;
 
+use std::format;
+
 use borsh::{BorshDeserialize, BorshSerialize};
 pub use header::BlockHeader;
 pub use body::BlockBody;
-use marketplace_helpers::objects::{ID, IdHash};
+use marketplace_helpers::objects::{AgentResult, ID, IdHash};
 
 use crate::Contract;
 
@@ -79,6 +81,26 @@ impl Block {
     pub fn gdc(&self) -> [u8; 16] {
         self.header().new_gdc().inner().to_be_bytes()
     }
+}
+
+// Validation
+impl Block {
+
+    /// Validate the block uses the same previous header
+    pub fn validate(&self, prev_header: &BlockHeader) -> AgentResult<()> {
+        // This should be the block header if the previous header is the input of
+        // the function.
+        let blk_hdr = BlockHeader::new(prev_header, &self.body);
+
+        // Compare headers
+        if self.id() != blk_hdr.id() {
+            return Err(format!(
+                "Error: Block header is the prev header"
+            ))
+        }
+
+        Ok(())
+    } 
 }
 
 
