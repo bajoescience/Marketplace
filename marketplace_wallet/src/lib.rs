@@ -5,6 +5,7 @@
 pub mod wallet;
 pub mod owner;
 pub mod crypto;
+pub mod voting;
 
 pub use wallet::Wallet;
 pub use owner::{Lock, Key, Owner};

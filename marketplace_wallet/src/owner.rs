@@ -82,7 +82,7 @@ impl Owner {
         }
     }
 
-    // Return owner's public key
+    /// Return owner's public key
     pub fn pk(&self) -> ID {
         match self {
             Owner::SIG(wallet) => wallet.pubkey_bytes()

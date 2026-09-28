@@ -254,7 +254,7 @@ use super::*;
 
         // Input
         let workptr = workptr(&ipt_owner, blk_hdr.id());
-        let mut ctr = JobContract::new(workptr, blk_hdr);
+        let mut ctr = JobContract::new(workptr, blk_hdr.clone());
 
         // Result
         let result_ptr = resultptr(
@@ -283,7 +283,7 @@ use super::*;
 
         // Input
         let workptr = workptr(&ipt_owner, blk_hdr.id());
-        let mut ctr = JobContract::new(workptr, blk_hdr);
+        let mut ctr = JobContract::new(workptr, blk_hdr.clone());
 
         // ResultPtr Initializers
         let work_id = ctr.input().id();
@@ -292,6 +292,7 @@ use super::*;
 
         // Assemble Whiteroom max results
         for _ in 0..WHITEROOM_SIZE {
+            let header = blk_hdr.clone();
             handles.push(thread::spawn(move || {
                 let wr_owner = Owner::new_sig();
 
@@ -299,7 +300,7 @@ use super::*;
                 let result_ptr = resultptr(
                     work_id,
                     &wr_owner,
-                    blk_hdr.vdf_diff()
+                    header.vdf_diff()
                 );
 
                 result_ptr

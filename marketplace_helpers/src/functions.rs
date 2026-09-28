@@ -5,6 +5,7 @@ use time::OffsetDateTime;
 
 use crate::objects::{ID, MIN_WORK_SIZE, VDF_CONSTANT, VRF_T, WHITEROOM_SIZE, WU};
 use alloy_primitives::{U256, U512};
+use rug::{Float, Integer, Rational};
 
 /// BFT whiteroom size given f amounts of tolerable faulty nodes
 pub fn bft_from(f: usize) -> usize {
@@ -128,10 +129,15 @@ pub fn casual_fee_price(amount: WU) -> WU {
 }
 
 // Get a Whiteroom seed using hash of work_ptr_id and pub key
-pub fn wr_seed(work_ptr_id: &ID, pk: &[u8]) -> ID {
+pub fn wr_seed(work_ptr_id: &[u8], pk: &[u8]) -> ID {
+    seed(work_ptr_id, pk)
+}
+
+// Get any seed by hashing two inputs
+pub fn seed(ipt_0: &[u8], ipt_1: &[u8]) -> ID {
     let mut hasher = Sha3_256::new();
-    hasher.update(pk);
-    hasher.update(work_ptr_id);
+    hasher.update(ipt_0);
+    hasher.update(ipt_1);
 
     hasher.finalize().into()
 }
@@ -162,6 +168,26 @@ pub fn validate_address_and_checksum(addr: Vec<u8>) -> ID {
 
 pub fn timestamp() -> u64 {
     OffsetDateTime::now_utc().unix_timestamp() as u64
+}
+
+/// Probability of voters chosen 
+/// is given by  p = expected_users / total_currency
+pub fn voter_probability(users: u128, total_currency: WU) -> f64 {
+    let rational = Rational::from(users / total_currency.inner());
+
+    rational.to_f64()
+}
+
+/// Hash constant given by 
+/// 
+/// c = hash / 2 ^ 256
+/// where 256 bits is the hash length.
+pub fn hashconstant(hash: ID) -> f64 {
+    let hash = U256::from_be_bytes(hash);
+
+    let value = (hash >> 203usize).to::<u64>();
+
+    value as f64 / ((1u64 << 53) - 1) as f64
 }
 
 
@@ -230,4 +256,7 @@ mod tests {
 
         assert_eq!(fee_price(money), fee)
     }
+
+    // TODO: test that hash constant function should always produce the same f64 value
+    // without any bit problems suitable for a decentralized platform
 }

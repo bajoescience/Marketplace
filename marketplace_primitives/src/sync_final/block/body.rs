@@ -114,7 +114,7 @@ use crate::{BlockHeader, JobContract};
 
         // Initialize valid Work Ptr
         let workptr = workptr(&owner, blk_hdr.id());
-        let mut jobctr = JobContract::new(workptr, blk_hdr);
+        let mut jobctr = JobContract::new(workptr, blk_hdr.clone());
 
         // Initialize size result pointers
         // ResultPtr Initializers
@@ -124,6 +124,7 @@ use crate::{BlockHeader, JobContract};
 
         // Assemble Whiteroom results
         for _ in 0..WHITEROOM_SIZE {
+            let header = blk_hdr.clone();
             handles.push(thread::spawn(move || {
                 let wr_owner = Owner::new_sig();
 
@@ -131,7 +132,7 @@ use crate::{BlockHeader, JobContract};
                 let result_ptr = resultptr(
                     work_id,
                     &wr_owner,
-                    blk_hdr.vdf_diff()
+                    header.vdf_diff()
                 );
 
                 result_ptr

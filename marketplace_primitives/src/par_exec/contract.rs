@@ -78,7 +78,7 @@ use marketplace_helpers::objects::{AgentResult, WHITEROOM_SIZE};
 
         // Input
         let workptr = workptr(&ipt_owner, blk_hdr.id());
-        let mut jobctr = JobContract::new(workptr, blk_hdr);
+        let mut jobctr = JobContract::new(workptr, blk_hdr.clone());
         
         // ResultPtr Initializers
         let work_id = jobctr.input().id();
@@ -87,6 +87,8 @@ use marketplace_helpers::objects::{AgentResult, WHITEROOM_SIZE};
 
         // Assemble Whiteroom max results
         for _ in 0..WHITEROOM_SIZE {
+            let header = blk_hdr.clone();
+
             handles.push(thread::spawn(move || {
                 let wr_owner = Owner::new_sig();
 
@@ -94,7 +96,7 @@ use marketplace_helpers::objects::{AgentResult, WHITEROOM_SIZE};
                 let result_ptr = resultptr(
                     work_id,
                     &wr_owner,
-                    blk_hdr.vdf_diff()
+                    header.vdf_diff()
                 );
 
                 result_ptr

@@ -27,7 +27,10 @@ const METADATA: TableDefinition<&str, &[u8]> = TableDefinition::new("metadata");
 // while only the headers are kept in memory
 pub struct Blockchain {
     // Database
-    db: Database
+    db: Database,
+
+    // Store finalized contracts
+    ctrs: Vec<Contract>
 }
 
 impl Blockchain {
@@ -89,7 +92,8 @@ impl Blockchain {
         Self::init_tables(&db)?;
 
         Ok(Self {
-            db
+            db,
+            ctrs: Vec::new(),
         })
     }
 
@@ -290,7 +294,24 @@ impl Blockchain {
         Ok(())
     }
 
-    // TODO: Add received finalized block to mempool
+    // Add received finalized contracts to blockchain
+    // and return a block to be proposed
+    pub fn get_propose_block(&mut self, ctrs: Vec<Contract>) -> AgentResult<Block> {
+        // Validate each contract and store it
+        for ctr in ctrs.into_iter() {
+            self.validate_contract(&ctr)?;
+
+            self.ctrs.push(ctr);
+        }
+
+        // New block
+        let block = Block::new(
+            self.latest_block().expect("Error getting latest block").header(), 
+            self.ctrs.clone()
+        );
+
+        Ok(block)
+    }
 }
 
 // Iterator struct for blockchain

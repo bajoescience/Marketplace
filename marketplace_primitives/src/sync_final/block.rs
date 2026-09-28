@@ -1,14 +1,15 @@
 mod header;
 mod body;
 
-use std::format;
+use std::{collections::{HashMap, hash_map::Entry}, format};
 
 use borsh::{BorshDeserialize, BorshSerialize};
 pub use header::BlockHeader;
 pub use body::BlockBody;
-use marketplace_helpers::objects::{AgentResult, ID, IdHash};
+use marketplace_helpers::{functions, objects::{AgentResult, ID, IdHash}};
+use marketplace_wallet::{Key, Lock, Owner};
 
-use crate::Contract;
+use crate::{Contract, Proposal, Verify};
 
 /// # Block
 /// 
@@ -19,6 +20,10 @@ use crate::Contract;
 pub struct Block {
     header: BlockHeader,
     body: BlockBody,
+
+    // Prove ownership of block voters (proposer and validators)
+    #[borsh(skip)]
+    auth: HashMap<ID, Key>
 }
 
 impl Block {
@@ -36,7 +41,8 @@ impl Block {
 
         Self {
             header,
-            body
+            body,
+            auth: HashMap::new(),
         }
     }
 
@@ -45,6 +51,7 @@ impl Block {
         Block { 
             header: BlockHeader::genesis(),
             body: BlockBody::genesis(), 
+            auth: HashMap::new(),
         }
     }
 
@@ -83,9 +90,46 @@ impl Block {
     }
 }
 
+// Setter methods
+impl Block {
+    /// Add a proposal to a block, and sign the block.
+    /// 
+    /// The owner must be the same used to create the proposal
+    pub fn add_proposal(&mut self, proposal: Proposal, owner: &Owner) -> AgentResult<()> {
+        // Verify proposal
+        proposal.verify()?;
+
+        self.header.add_proposal(proposal);
+
+        // Sign block
+        let lock = owner.as_lock();
+        let key = owner.sign(&self.id());
+
+        self.add_auth(lock, key, false)
+    }
+
+     pub fn add_auth(&mut self, lock: Lock, key: Key, force: bool) -> AgentResult<()> {
+        match self.auth.entry(lock.id()) {
+            Entry::Vacant(entry) => {
+                entry.insert(key);
+            },
+            Entry::Occupied(mut entry) if force => {
+                entry.insert(key);
+            },
+            _ => {
+                return Err(format!(
+                    "Key already exists for Lock ID {}",
+                    functions::from_bytes(&lock.id())
+                ))
+            }
+        };
+
+        Ok(())
+    }
+}
+
 // Validation
 impl Block {
-
     /// Validate the block uses the same previous header
     pub fn validate(&self, prev_header: &BlockHeader) -> AgentResult<()> {
         // This should be the block header if the previous header is the input of
@@ -100,7 +144,31 @@ impl Block {
         }
 
         Ok(())
-    } 
+    }
+}
+
+impl Verify for Block {
+    fn verify(&self) -> AgentResult<()> {
+        let Some(proposal) = self.header().proposer() else {
+            return Err(format!(
+                "Block has no proposer"
+            ))
+        };
+
+        let proposer = proposal.voter();
+
+        // Unlock lock to prove ownership
+        if let Some(key) = self.auth.get(&proposer.id()) {
+            proposer.unlock(key, &self.id())?;
+        } else {
+            return Err(format!(
+                "Error: Key does not exist for proposer {}",
+                functions::from_bytes(&proposer.id()), 
+            ));
+        };
+
+        Ok(())
+    }
 }
 
 

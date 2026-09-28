@@ -30,12 +30,13 @@
 //! `Tx Contract` message
 //! `Block Header` message
 //! `Block` message
-use std::{any::{Any, TypeId}, format};
+use std::{any::{Any, TypeId}, format, todo};
 
 use marketplace_helpers::objects::{AgentResult};
 use marketplace_ledger::{Blockchain, Mempool, State};
 use marketplace_p2p::Message;
-use marketplace_primitives::{Contract, JobContract, ResultPtr, Verify, WorkPtr};
+use marketplace_primitives::{Contract, JobContract, Proposal, ResultPtr, Verify, WorkPtr};
+use marketplace_wallet::Owner;
 use marketplace_worker::Worker;
 
 /// This is the `Core` data structure that manages the state of the Marketplace node.
@@ -57,7 +58,10 @@ pub struct Core<T: State, W: Worker> {
     state: T,
 
     // Worker that executes a VDF, and a Job
-    worker: Option<W>
+    worker: Option<W>,
+
+    // Node authentication
+    owner: Owner,
 }
 
 impl<T: State, W: Worker> Core<T, W> {
@@ -68,12 +72,14 @@ impl<T: State, W: Worker> Core<T, W> {
     /// This method also takes as a parameter a worker that implements
     /// the `Worker` trait. This worker executes jobs and whiteroom challenges
     /// on behalf of the nodes.
-    pub fn new(state: T, worker: Option<W>) -> Self {
+    /// 
+    /// The `owner` is used to authenticate a node, and it is used to vote
+    /// as proposer or validator of blocks on the network.
+    pub fn new(state: T, worker: Option<W>, chain: Blockchain, owner: Owner) -> Self {
         // Initialize the blockchain as the dead state
 
         // TODO: Update chain with blocks from network first
         // if the blockchain is not up to date
-        let chain = Blockchain::new();
 
         // Initialize new mempool to act as live state
         // keeping track of jobs and unfinalized contracts.
@@ -85,7 +91,8 @@ impl<T: State, W: Worker> Core<T, W> {
             chain,
             mempool,
             state,
-            worker
+            worker,
+            owner
         }
     }
 
@@ -160,16 +167,21 @@ impl<T: State, W: Worker> Core<T, W> {
     fn handle_work_ptr(&mut self, workptr: &WorkPtr) -> AgentResult<()> {
         // Fetch blockheader from blockchain
         // referenced by workptr
-        let Some(blk_hdr) = self.chain.find_hdr(workptr.blk_hdr()) else {
+        let Some(blk) = self.chain.get_block_by_id(workptr.blk_hdr()).unwrap() else {
             return Err(format!(
                 "Error: Block header does not exist"
             ))
         };
+
+        // If workptr is recent, execute it with worker
+        if self.chain.is_recent(*workptr.blk_hdr()).unwrap() {
+            // TODO: Execute work
+        }
         
         // Initialize new Job contract
         let jobctr = JobContract::new(
             workptr.clone(), 
-            blk_hdr.clone()
+            blk.header().clone()
         );
 
         let ctr = Contract::JOB(jobctr);
@@ -207,8 +219,8 @@ impl<T: State, W: Worker> Core<T, W> {
         Ok(())
     }
 
-    // TODO: Handle block and handover block to mempool
-    // Handle block that has no job in state also. 
+    // TODO: Handle block and handover block to blockchain
+    // Handle block that has no job in state also.
 
     // TODO: Handle new block header to the state
     // Also update blockchain to accomodate new chosen block
@@ -264,5 +276,38 @@ impl<T: State, W: Worker> Core<T, W> {
                 }
             },
         }
+    }
+}
+
+// Handle methods for blocks
+impl<T: State, W: Worker> Core<T, W> {
+    /// Try to generate a new `Block` form a list of finalized `Contracts`
+    /// to send to the network
+    /// 
+    /// A `Block` can only be valid to send to the rest of the network
+    /// if the current node is chosen as a block proposer
+    pub fn propose(&mut self) -> AgentResult<()> {
+        // Get finalized contracts
+        let ctrs = self.mempool.get_pending_ctrs();
+
+        // Add contracts to blockchain and get a block if chosen
+        // as a proposer
+        let mut block = self.chain.get_propose_block(ctrs)?;
+
+        // Attempt to be a proposer to 
+        // send block to the network.
+        if let Some(proposal) = self.is_proposer() {
+            // Add proposal to block header
+            block.add_proposal(proposal, &self.owner)?;  
+
+            // TODO: Send block to network
+        };
+
+        Ok(())
+    }
+
+    // Attempt proposer
+    pub fn is_proposer(&self) -> Option<Proposal> {
+        todo!()
     }
 }

@@ -1,7 +1,9 @@
-mod sync_final;
-
 // Parallel Execution
 mod par_exec;
+
+
+// Synchronous finalization
+mod sync_final;
 
 pub use self::par_exec::{
     Tx, Contract, TxIO, TxIdentifier, Whiteroom, 
@@ -9,7 +11,7 @@ pub use self::par_exec::{
     ExecuteTime, ResultInfo
 };
 
-pub use self::sync_final::{Block, BlockHeader};
+pub use self::sync_final::{Block, BlockHeader, Proposal};
 
 use marketplace_helpers as helpers;
 use marketplace_wallet as wallet;

@@ -1,9 +1,9 @@
 use borsh::{BorshDeserialize, BorshSerialize};
-use marketplace_helpers::{functions, objects::{ID, IdHash, VRF_T, WHITEROOM_SIZE, WU}};
+use marketplace_helpers::{functions, objects::{AgentResult, ID, IdHash, VRF_T, WHITEROOM_SIZE, WU}};
 
-use crate::{WRVote, sync_final::block::BlockBody};
+use crate::{Proposal, WRVote, sync_final::block::BlockBody};
 
-#[derive(BorshSerialize, BorshDeserialize, Debug, Clone, Copy)]
+#[derive(BorshSerialize, BorshDeserialize, Debug, Clone)]
 pub struct BlockHeader {
     // Epoch
     epoch: u64,
@@ -25,6 +25,8 @@ pub struct BlockHeader {
 
     // TODO: Proposer: identity that proposed this block.
     // the proposer does not contribute to the block hash.
+    #[borsh(skip)]
+    proposer: Option<Proposal>
 
     // TODO: Valdators: whiteroom identity that validated this block.
     // the validators do not contribute to the block hash.
@@ -47,7 +49,9 @@ impl BlockHeader {
 
             // Max 255 bit number which means a
             // whiteroom selection probability of 1
-            vrf_t: [255; 32]
+            vrf_t: [255; 32],
+
+            proposer: None,
         }
     }
 
@@ -74,13 +78,20 @@ impl BlockHeader {
             vrf_t: functions::get_vrf(
                 body.wr_avg(), 
                 prev_header.vrf_t()
-            )
+            ),
+
+            proposer: None,
         }
     }
 }
 
 // Getter methods
 impl BlockHeader {
+    // Get proposer if it exists
+    pub fn proposer(&self) -> &Option<Proposal> {
+        &self.proposer
+    }
+
     // Get epoch
     pub fn epoch(&self) -> u64 {
         self.epoch
@@ -116,6 +127,14 @@ impl BlockHeader {
     // Get previous block header
     pub fn prev(&self) -> ID {
         self.prev
+    }
+}
+
+// Setter methods
+impl BlockHeader {
+    // Add proposal to block header
+    pub fn add_proposal(&mut self, proposal: Proposal) {
+        self.proposer = Some(proposal)
     }
 }
 

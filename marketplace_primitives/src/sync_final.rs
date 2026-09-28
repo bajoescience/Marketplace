@@ -1,4 +1,8 @@
 /// ## Synchronous Finalization
 pub mod block;
+pub mod proposal;
 
-pub use block::{BlockHeader, Block};
+use borsh::{BorshDeserialize, BorshSerialize};
+
+pub use self::block::{BlockHeader, Block};
+pub use self::proposal::Proposal;
