@@ -35,8 +35,8 @@ use std::{any::{Any, TypeId}, format, todo};
 use marketplace_helpers::objects::{AgentResult};
 use marketplace_ledger::{Blockchain, Mempool, State};
 use marketplace_p2p::Message;
-use marketplace_primitives::{Contract, JobContract, Proposer, ResultPtr, Verify, WorkPtr};
-use marketplace_wallet::Owner;
+use marketplace_primitives::{BlockHeader, Contract, JobContract, Proposal, Proposer, ResultPtr, Verify, WorkPtr};
+use marketplace_wallet::{Owner, voting};
 use marketplace_worker::Worker;
 
 /// This is the `Core` data structure that manages the state of the Marketplace node.
@@ -286,29 +286,60 @@ impl<T: State, W: Worker> Core<T, W> {
     /// 
     /// A `Block` can only be valid to send to the rest of the network
     /// if the current node is chosen as a block proposer
-    pub fn propose(&mut self) -> AgentResult<()> {
+    pub fn propose_block(&mut self) -> AgentResult<()> {
         // Get finalized contracts
         let ctrs = self.mempool.get_pending_ctrs();
 
         // Add contracts to blockchain and get a block if chosen
         // as a proposer
-        let mut block = self.chain.get_propose_block(ctrs)?;
+        let block = self.chain.get_propose_block(ctrs)?;
 
         // Attempt to be a proposer to 
         // send block to the network.
-        if let Some(proposer) = self.is_proposer(&block.id()) {
-            // Add proposal to block header
-            block.add_proposer(proposer);  
+        let proposer = Proposer::build(&self.owner, &block.header().prev());
+        
+        // If subusers is greater than 0, node has been chosen to propose
+        // block.
+        if self.get_subusers(&proposer, block.header())? > 0  {
+            // Create new proposal wrapper around block
+            // to also add proposer toblock
+            let proposal = Proposal::new(
+                &self.owner, 
+                proposer, 
+                block
+            )?;
 
-            // TODO: Send block to network
+            // TODO: Send Proposal to network
+            todo!()
         };
 
         Ok(())
     }
 
-    // Attempt proposer using previous block hash as seed
-    pub fn is_proposer(&self, seed: &[u8]) -> Option<Proposer> {
-        // Create a new proposer to propose a block
+    /// Validate the `Block` with the highest gdc
+    /// by sending it's `BlockHeader` to the network as a finalized `Block`
+    pub fn validate_block(&mut self) -> AgentResult<()> {
+        // Get finalized block from chain
         todo!()
+    }
+
+    /// Get subusers using proposal and user amount
+    pub fn get_subusers(&self, proposer: &Proposer, header: &BlockHeader) -> AgentResult<u64> {
+        // VRF output
+        let vrf_opt = proposer.verify(&header.prev())?;
+
+        // User gdc balance
+        let user_amount = self.state.get_gdc_balance(self.owner.as_lock());
+
+        // User total currency
+        let total_currency = self.chain
+            .total_gdc()
+            .expect("Error: Could not fetch total goldcoin data from blockchain");
+
+        voting::subusers_count(
+            vrf_opt, 
+            user_amount, 
+            total_currency
+        )
     }
 }
