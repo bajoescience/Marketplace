@@ -4,7 +4,7 @@ use borsh::{BorshDeserialize, BorshSerialize};
 use marketplace_helpers::{functions, objects::{AgentResult, ID, IdHash}};
 use marketplace_wallet::{Key, Lock, Owner, voting::{self, Role, VotingProof}};
 
-use crate::{Verify, WRVote};
+use crate::{BlockHeader, Verify, WRVote};
 
 // This is a validator role
 const ROLE: Role = Role::Validator;
@@ -51,8 +51,8 @@ pub struct Validated {
     // Validator
     voter: Validator,
 
-    // Validated block ID
-    header: ID,
+    // Validated blockheader
+    header: BlockHeader,
 
     // Prove ownership of Validated
     #[borsh(skip)]
@@ -81,11 +81,11 @@ impl Validated {
     }
 
     /// Create a new Validated using the block id and validator
-    pub fn build(owner: &Owner, validator: Validator, block_id: ID) -> AgentResult<Self> {
+    pub fn build(owner: &Owner, validator: Validator, header: BlockHeader) -> AgentResult<Self> {
         let voter = owner.as_lock();
 
         let mut validated = Self {
-            header: block_id,
+            header,
             voter: validator,
             auth: HashMap::new(),
         };
@@ -103,8 +103,8 @@ impl Validated {
 // it only validates the structure of the validated
 impl Verify for Validated {
     fn verify(&self) -> AgentResult<()> {
-        // Verify validator
-        self.voter.verify(&self.header)?;
+        // Verify validator using previous block hash
+        self.voter.verify(&self.header.prev())?;
 
         // Create lock from validator public key
         // which can be used to verify validated ownership
@@ -134,6 +134,6 @@ impl PartialEq for Validated {
 
 impl WRVote for Validated {
     fn as_vote(&self) -> ID {
-        self.header
+        self.header.id()
     }
 }

@@ -18,7 +18,7 @@ pub struct Proposer {
 }
 
 impl Proposer {
-    /// Build a new proposal using a block id
+    /// Build a new proposal using the previous block id
     pub fn build(owner: &Owner, seed: &[u8]) -> Self {
         let votingproof = voting::vrf(owner, ROLE, seed);
 
@@ -100,12 +100,17 @@ impl Proposal {
 // it only validates the structure of the proposal
 impl Verify for Proposal {
     fn verify(&self) -> AgentResult<()> {
+        let header = self.block.header();
+
         // Ensure proposer exists in block
-        let Some(proposer) = self.block.header().proposer() else {
+        let Some(proposer) = header.proposer() else {
             return Err(format!(
                 "Error: Proposer not found in block"
             ))
         };
+
+        // Verify proposer using previous block header
+        proposer.verify(&header.prev())?;
 
         // Get lock using public key in proposer
         let lock = Lock::SIG(
