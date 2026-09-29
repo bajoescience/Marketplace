@@ -35,7 +35,7 @@ use std::{any::{Any, TypeId}, format, todo};
 use marketplace_helpers::objects::{AgentResult};
 use marketplace_ledger::{Blockchain, Mempool, State};
 use marketplace_p2p::Message;
-use marketplace_primitives::{Contract, JobContract, Proposal, ResultPtr, Verify, WorkPtr};
+use marketplace_primitives::{Contract, JobContract, Proposal, Proposer, ResultPtr, Verify, WorkPtr};
 use marketplace_wallet::Owner;
 use marketplace_worker::Worker;
 
@@ -296,9 +296,9 @@ impl<T: State, W: Worker> Core<T, W> {
 
         // Attempt to be a proposer to 
         // send block to the network.
-        if let Some(proposal) = self.is_proposer() {
+        if let Some(proposer) = self.is_proposer() {
             // Add proposal to block header
-            block.add_proposal(proposal, &self.owner)?;  
+            block.add_proposer(proposer);  
 
             // TODO: Send block to network
         };
@@ -307,7 +307,7 @@ impl<T: State, W: Worker> Core<T, W> {
     }
 
     // Attempt proposer
-    pub fn is_proposer(&self) -> Option<Proposal> {
+    pub fn is_proposer(&self) -> Option<Proposer> {
         todo!()
     }
 }

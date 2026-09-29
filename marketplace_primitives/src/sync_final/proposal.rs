@@ -49,9 +49,6 @@ impl Proposer {
 /// a node uses it's VRF to vote
 #[derive(BorshSerialize, BorshDeserialize, Debug, Clone)]
 pub struct Proposal {
-    // proposer
-    voter: Lock,
-
     // Proposed block
     block: Block,
 
@@ -81,20 +78,19 @@ impl Proposal {
     }
 
     pub fn new(owner: &Owner, proposer: Proposer, mut block: Block) -> AgentResult<Self> {
-        block.add_proposer(proposer);
+        let lock = owner.as_lock();
 
-        let voter = owner.as_lock();
+        block.add_proposer(proposer);
 
         let mut proposal = Self {
             block,
-            voter,
             auth: HashMap::new(),
         };
 
         // Sign block
         let key = owner.sign(&proposal.id());
 
-        proposal.add_auth(voter, key, false)?;
+        proposal.add_auth(lock, key, false)?;
 
         Ok(proposal)
     }
@@ -111,26 +107,18 @@ impl Verify for Proposal {
             ))
         };
 
-        // Ensure that Lock and proof public key match
-        let Lock::SIG(pk_hash) = self.voter else {
-            return Err(format!(
-                "Error: Lock object is not valid"
-            ));
-        };
-
-        if pk_hash != functions::hash(proposer.pk()) {
-            return Err(format!(
-                "Error: public key not valid"
-            ))
-        }
+        // Get lock using public key in proposer
+        let lock = Lock::SIG(
+            functions::hash(proposer.pk())
+        );
 
         // Unlock lock to prove ownership
-        if let Some(key) = self.auth.get(&self.voter.id()) {
-            self.voter.unlock(key, &self.id())?;
+        if let Some(key) = self.auth.get(&lock.id()) {
+            lock.unlock(key, &self.id())?;
         } else {
             return Err(format!(
                 "Error: Key does not exist for proposer {}",
-                functions::from_bytes(&proposer.id()), 
+                functions::from_bytes(&lock.id()), 
             ));
         };
 

@@ -88,7 +88,7 @@ impl Block {
     /// Add a proposal to a block, and sign the block.
     /// 
     /// The owner must be the same used to create the proposal
-    pub fn add_proposer(&mut self, proposer: Proposer){
+    pub fn add_proposer(&mut self, proposer: Proposer) {
         self.header.add_proposer(proposer)
     }
 }
