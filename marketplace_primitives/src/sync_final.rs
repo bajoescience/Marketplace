@@ -1,8 +1,8 @@
 /// ## Synchronous Finalization
 pub mod block;
 pub mod proposal;
-
-use borsh::{BorshDeserialize, BorshSerialize};
+pub mod validator;
 
 pub use self::block::{BlockHeader, Block};
-pub use self::proposal::Proposal;
+pub use self::proposal::{Proposal, Proposer};
+pub use self::validator::{Validator, Validated};

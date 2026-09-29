@@ -11,7 +11,11 @@ pub use self::par_exec::{
     ExecuteTime, ResultInfo
 };
 
-pub use self::sync_final::{Block, BlockHeader, Proposal};
+pub use self::sync_final::{
+    Block, BlockHeader, 
+    Proposal, Proposer, 
+    Validator, Validated
+};
 
 use marketplace_helpers as helpers;
 use marketplace_wallet as wallet;

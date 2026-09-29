@@ -1,7 +1,7 @@
 use borsh::{BorshDeserialize, BorshSerialize};
-use marketplace_helpers::{functions, objects::{AgentResult, ID, IdHash, VRF_T, WHITEROOM_SIZE, WU}};
+use marketplace_helpers::{functions, objects::{ID, IdHash, VRF_T, WHITEROOM_SIZE, WU}};
 
-use crate::{Proposal, WRVote, sync_final::block::BlockBody};
+use crate::{Proposer, WRVote, sync_final::block::BlockBody};
 
 #[derive(BorshSerialize, BorshDeserialize, Debug, Clone)]
 pub struct BlockHeader {
@@ -23,13 +23,10 @@ pub struct BlockHeader {
     // VRF threshold
     vrf_t: VRF_T,
 
-    // TODO: Proposer: identity that proposed this block.
+    // Proposer: identity that proposed this block.
     // the proposer does not contribute to the block hash.
     #[borsh(skip)]
-    proposer: Option<Proposal>
-
-    // TODO: Valdators: whiteroom identity that validated this block.
-    // the validators do not contribute to the block hash.
+    proposer: Option<Proposer>,
 }
 
 // Associated functions
@@ -51,7 +48,7 @@ impl BlockHeader {
             // whiteroom selection probability of 1
             vrf_t: [255; 32],
 
-            proposer: None,
+            proposer: None
         }
     }
 
@@ -88,7 +85,7 @@ impl BlockHeader {
 // Getter methods
 impl BlockHeader {
     // Get proposer if it exists
-    pub fn proposer(&self) -> &Option<Proposal> {
+    pub fn proposer(&self) -> &Option<Proposer> {
         &self.proposer
     }
 
@@ -132,9 +129,9 @@ impl BlockHeader {
 
 // Setter methods
 impl BlockHeader {
-    // Add proposal to block header
-    pub fn add_proposal(&mut self, proposal: Proposal) {
-        self.proposer = Some(proposal)
+    // Add proposer to block header
+    pub fn add_proposer(&mut self, proposer: Proposer) {
+        self.proposer = Some(proposer)
     }
 }
 
