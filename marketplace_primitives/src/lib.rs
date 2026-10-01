@@ -13,7 +13,7 @@ pub use self::par_exec::{
 
 pub use self::sync_final::{
     Block, BlockHeader, 
-    Proposal, Proposer, 
+    Proposer, 
     Validator, Validated
 };
 

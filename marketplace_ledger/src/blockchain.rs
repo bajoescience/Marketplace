@@ -2,7 +2,7 @@ use marketplace_helpers::{functions, objects::{AgentResult, ID, IdHash, StdResul
 
 use marketplace_primitives::{Block, Contract, Verify};
 
-use std::{format, path::Path};
+use std::{format, panic, path::Path};
 
 use redb::{Database, Error, ReadableDatabase, ReadableTable, ReadableTableMetadata, TableDefinition};
 
@@ -30,7 +30,10 @@ pub struct Blockchain {
     db: Database,
 
     // Store finalized contracts
-    ctrs: Vec<Contract>
+    ctrs: Vec<Contract>,
+
+    // Store proposed block
+    proposed: ProposedBlock
 }
 
 impl Blockchain {
@@ -94,6 +97,7 @@ impl Blockchain {
         Ok(Self {
             db,
             ctrs: Vec::new(),
+            proposed: ProposedBlock::new(),
         })
     }
 
@@ -282,7 +286,7 @@ impl Blockchain {
     /// 
     /// This method takes a Block from the mempool and
     /// adds it to the chain
-    pub fn add_block(&mut self, block: Block) -> AgentResult<()> {
+    pub fn publish_block(&mut self, block: Block) -> AgentResult<()> {
 
         // Confirm and validate block
         self.validate_block(&block)?;
@@ -312,6 +316,47 @@ impl Blockchain {
 
         Ok(block)
     }
+
+    /// Add a proposed block to be cached
+    /// 
+    /// It is illegal to add a block when there is a proposed
+    /// block that has not been cleared, which will cause the method
+    /// to panic.
+    pub fn add_block(&mut self, block: Block, subusers: u64) {
+        self.proposed.update(block, subusers);
+    }
+}
+
+// Store block and subuser count
+struct ProposedBlock {
+    block: Option<Block>,
+    subusers: u64
+}
+
+impl ProposedBlock {
+    fn new() -> Self {
+        Self {
+            block: None,
+            subusers: 0,
+        }
+    }
+
+    fn update(&mut self, block: Block, subusers: u64) {
+        // Update subuser count
+        self.subusers += subusers;
+
+        match &self.block {
+            Some(current_block) => {
+                // If new block has more new gdc than current block, replace block
+                if block.header().new_gdc() > current_block.header().new_gdc() {
+                    self.block = Some(block);
+                }
+            },
+            None => {
+                self.block = Some(block)
+            }
+        };
+    } 
 }
 
 // Iterator struct for blockchain
@@ -335,7 +380,6 @@ impl<'a> Iterator for BlockChainIterator<'a> {
         block_option
     }
 }
-
 
 #[cfg(test)]
 mod tests {
@@ -424,7 +468,7 @@ use marketplace_wallet::Owner;
 
         let block = Block::new(Block::genesis().header(), vec![]);
 
-        chain.add_block(block)?;
+        chain.publish_block(block)?;
 
         assert_eq!(chain.len()?, 2);
 
@@ -446,7 +490,7 @@ use marketplace_wallet::Owner;
             vec![ctr(&owner, &owner)]
         );
 
-        chain.add_block(block)?;
+        chain.publish_block(block)?;
 
         assert_eq!(chain.len()?, 2);
 
@@ -460,10 +504,10 @@ use marketplace_wallet::Owner;
         let path = test_db("rejects_existing_epoch");
         let mut chain = Blockchain::init(&path)?;
 
-        chain.add_block(Block::new(Block::genesis().header(), vec![]))?;
+        chain.publish_block(Block::new(Block::genesis().header(), vec![]))?;
         let duplicate_epoch = Block::new(Block::genesis().header(), vec![]);
 
-        let error = chain.add_block(duplicate_epoch).unwrap_err();
+        let error = chain.publish_block(duplicate_epoch).unwrap_err();
         assert!(error.contains("Block header does not match expected"));
 
         fs::remove_file(path)?;
@@ -495,7 +539,7 @@ use marketplace_wallet::Owner;
             let mut chain = Blockchain::init(&path)?;
             let block = Block::new(Block::genesis().header(), vec![]);
             block_id = block.id();
-            chain.add_block(block)?;
+            chain.publish_block(block)?;
 
             assert_eq!(chain.len()?, 2);
             assert_eq!(chain.total_gdc()?, WU::GDC());
@@ -516,8 +560,8 @@ use marketplace_wallet::Owner;
         let path = test_db("iterates_from_genesis");
         let mut chain = Blockchain::init(&path)?;
 
-        chain.add_block(Block::new(chain.latest_block()?.header(), vec![]))?;
-        chain.add_block(Block::new(chain.latest_block()?.header(), vec![]))?;
+        chain.publish_block(Block::new(chain.latest_block()?.header(), vec![]))?;
+        chain.publish_block(Block::new(chain.latest_block()?.header(), vec![]))?;
 
         let block_ids: Vec<ID> = chain.iter(0).map(|block| block.id()).collect();
         let expected_ids: Vec<ID> = (0..chain.len()?)
@@ -537,8 +581,8 @@ use marketplace_wallet::Owner;
         let path = test_db("iterator_nonzero_start");
         let mut chain = Blockchain::init(&path)?;
 
-        chain.add_block(Block::new(chain.latest_block()?.header(), vec![]))?;
-        chain.add_block(Block::new(chain.latest_block()?.header(), vec![]))?;
+        chain.publish_block(Block::new(chain.latest_block()?.header(), vec![]))?;
+        chain.publish_block(Block::new(chain.latest_block()?.header(), vec![]))?;
 
         let epoch_one_id = chain.get_block_by_epoch(1)?.unwrap().id();
         let epoch_two_id = chain.get_block_by_epoch(2)?.unwrap().id();
@@ -572,7 +616,7 @@ use marketplace_wallet::Owner;
         let mut chain = Blockchain::init(&path)?;
         let next_block = Block::new(chain.latest_block()?.header(), vec![]);
         let next_block_id = next_block.id();
-        chain.add_block(next_block)?;
+        chain.publish_block(next_block)?;
 
         assert_eq!(chain.get_block_by_epoch(0)?.unwrap().id(), Block::genesis().id());
         assert_eq!(chain.get_block_by_epoch(1)?.unwrap().id(), next_block_id);
@@ -604,9 +648,9 @@ use marketplace_wallet::Owner;
         assert!(chain.is_recent(genesis_id)?);
         assert!(!chain.is_recent([42u8; 32])?);
 
-        chain.add_block(Block::new(chain.latest_block()?.header(), vec![]))?;
+        chain.publish_block(Block::new(chain.latest_block()?.header(), vec![]))?;
         let first_id = chain.latest_block()?.id();
-        chain.add_block(Block::new(chain.latest_block()?.header(), vec![]))?;
+        chain.publish_block(Block::new(chain.latest_block()?.header(), vec![]))?;
         let second_id = chain.latest_block()?.id();
 
         assert!(chain.is_recent(second_id)?);
@@ -635,7 +679,7 @@ use marketplace_wallet::Owner;
     fn rejects_block_built_from_stale_tip() -> StdResult<()> {
         let path = test_db("rejects_stale_tip");
         let mut chain = Blockchain::init(&path)?;
-        chain.add_block(Block::new(chain.latest_block()?.header(), vec![]))?;
+        chain.publish_block(Block::new(chain.latest_block()?.header(), vec![]))?;
 
         let stale_block = Block::new(Block::genesis().header(), vec![]);
         let error = chain.validate_block(&stale_block).unwrap_err();
@@ -653,7 +697,7 @@ use marketplace_wallet::Owner;
 
         {
             let mut chain = Blockchain::init(&path)?;
-            chain.add_block(Block::new(chain.latest_block()?.header(), vec![]))?;
+            chain.publish_block(Block::new(chain.latest_block()?.header(), vec![]))?;
         }
 
         let chain = Blockchain::init(&path)?;

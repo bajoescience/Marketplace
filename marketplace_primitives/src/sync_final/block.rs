@@ -1,14 +1,15 @@
 mod header;
 mod body;
 
-use std::{ format};
+use std::{ collections::{HashMap, hash_map::Entry}, format};
 
 use borsh::{BorshDeserialize, BorshSerialize};
 pub use header::BlockHeader;
 pub use body::BlockBody;
-use marketplace_helpers::{ objects::{AgentResult, ID, IdHash}};
+use marketplace_helpers::{ functions, objects::{AgentResult, ID, IdHash}};
+use marketplace_wallet::{Key, Lock};
 
-use crate::{Contract, Proposer};
+use crate::{Contract, Proposer, Verify};
 
 /// # Block
 /// 
@@ -19,6 +20,11 @@ use crate::{Contract, Proposer};
 pub struct Block {
     header: BlockHeader,
     body: BlockBody,
+
+    // Prove ownership of proposer or validator
+    // in blockheader
+    #[borsh(skip)]
+    auth: HashMap<ID, Key>,
 }
 
 impl Block {
@@ -37,6 +43,7 @@ impl Block {
         Self {
             header,
             body,
+            auth: HashMap::new(),
         }
     }
 
@@ -45,6 +52,7 @@ impl Block {
         Block { 
             header: BlockHeader::genesis(),
             body: BlockBody::genesis(),
+            auth: HashMap::new(),
         }
     }
 
@@ -91,6 +99,25 @@ impl Block {
     pub fn add_proposer(&mut self, proposer: Proposer) {
         self.header.add_proposer(proposer)
     }
+
+    pub fn add_auth(&mut self, lock: Lock, key: Key, force: bool) -> AgentResult<()> {
+        match self.auth.entry(lock.id()) {
+            Entry::Vacant(entry) => {
+                entry.insert(key);
+            },
+            Entry::Occupied(mut entry) if force => {
+                entry.insert(key);
+            },
+            _ => {
+                return Err(format!(
+                    "Key already exists for Lock ID {}",
+                    functions::from_bytes(&lock.id())
+                ))
+            }
+        };
+
+        Ok(())
+    }
 }
 
 // Validation
@@ -107,6 +134,42 @@ impl Block {
                 "Error: Block header does not match expected"
             ))
         }
+
+        Ok(())
+    }
+}
+
+// Verify block must have proposal
+// before being considered by the rest of the network
+impl Verify for Block {
+    fn verify(&self) -> AgentResult<()> {
+        let header = self.header();
+
+        // Ensure proposer exists in block
+        // Ensure proposer exists in block
+        let Some(proposer) = header.proposer() else {
+            return Err(format!(
+                "Error: Proposer not found in block"
+            ))
+        };
+
+        // Verify proposer using previous block header
+        proposer.verify(&header.prev())?;
+
+        // Get lock using public key in proposer
+        let lock = Lock::SIG(
+            functions::hash(proposer.pk())
+        );
+
+        // Unlock lock to prove ownership
+        if let Some(key) = self.auth.get(&lock.id()) {
+            lock.unlock(key, &self.id())?;
+        } else {
+            return Err(format!(
+                "Error: Key does not exist for proposer {}",
+                functions::from_bytes(&lock.id()), 
+            ));
+        };
 
         Ok(())
     }
