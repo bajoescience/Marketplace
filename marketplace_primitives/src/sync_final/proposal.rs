@@ -2,6 +2,8 @@ use borsh::{BorshDeserialize, BorshSerialize};
 use marketplace_helpers::{objects::{AgentResult, ID}};
 use marketplace_wallet::{Owner, voting::{self, Role, VotingProof}};
 
+use crate::{Block, Verify};
+
 // This is a validator role
 const ROLE: Role = Role::Proposer;
 
@@ -37,3 +39,37 @@ impl Proposer {
         self.proof.pk()
     }
 }
+
+#[derive(BorshSerialize, BorshDeserialize, Debug, Clone)]
+pub struct Proposal {
+    block: Block,
+    proposer: Proposer
+}
+
+impl Proposal {
+    pub fn new(owner: &Owner, block: Block) -> Self {
+        let proposer = Proposer::build(owner, &block.id());
+
+        Self {
+            block,
+            proposer: proposer
+        }
+    }
+}
+
+// Getter methods
+impl Proposal {
+    pub fn get_vrf_hash(&self) -> AgentResult<ID> {
+        self.proposer.verify(&self.block.id())
+    }
+}
+
+// Verify proposer used block id as seed, and that the proposer is valid
+impl Verify for Proposal {
+    fn verify(&self) -> AgentResult<()> {
+        self.proposer.verify(&self.block.id())?;
+
+        Ok(())
+    }
+}
+

@@ -90,7 +90,7 @@ impl Validated {
             auth: HashMap::new(),
         };
 
-        // Sign block
+        // Sign validated struct
         let key = owner.sign(&validated.id());
 
         validated.add_auth(voter, key, false)?;

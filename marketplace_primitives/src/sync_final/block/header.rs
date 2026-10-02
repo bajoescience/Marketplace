@@ -1,7 +1,7 @@
 use borsh::{BorshDeserialize, BorshSerialize};
 use marketplace_helpers::{functions, objects::{ID, IdHash, VRF_T, WHITEROOM_SIZE, WU}};
 
-use crate::{Proposer, WRVote, sync_final::block::BlockBody};
+use crate::{WRVote, sync_final::block::BlockBody};
 
 #[derive(BorshSerialize, BorshDeserialize, Debug, Clone)]
 pub struct BlockHeader {
@@ -22,11 +22,6 @@ pub struct BlockHeader {
 
     // VRF threshold
     vrf_t: VRF_T,
-
-    // Proposer: identity that proposed this block.
-    // the proposer does not contribute to the block hash.
-    #[borsh(skip)]
-    proposer: Option<Proposer>,
 }
 
 // Associated functions
@@ -47,8 +42,6 @@ impl BlockHeader {
             // Max 255 bit number which means a
             // whiteroom selection probability of 1
             vrf_t: [255; 32],
-
-            proposer: None
         }
     }
 
@@ -76,19 +69,12 @@ impl BlockHeader {
                 body.wr_avg(), 
                 prev_header.vrf_t()
             ),
-
-            proposer: None,
         }
     }
 }
 
 // Getter methods
 impl BlockHeader {
-    // Get proposer if it exists
-    pub fn proposer(&self) -> &Option<Proposer> {
-        &self.proposer
-    }
-
     // Get epoch
     pub fn epoch(&self) -> u64 {
         self.epoch
@@ -129,10 +115,7 @@ impl BlockHeader {
 
 // Setter methods
 impl BlockHeader {
-    // Add proposer to block header
-    pub fn add_proposer(&mut self, proposer: Proposer) {
-        self.proposer = Some(proposer)
-    }
+   
 }
 
 impl PartialEq for BlockHeader {

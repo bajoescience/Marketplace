@@ -1,6 +1,6 @@
 use marketplace_helpers::{functions, objects::{AgentResult, ID, IdHash, StdResult, WU}};
 
-use marketplace_primitives::{Block, Contract, Verify};
+use marketplace_primitives::{Block, Contract, Proposal, Verify};
 
 use std::{format, panic, path::Path};
 
@@ -298,8 +298,8 @@ impl Blockchain {
         Ok(())
     }
 
-    // Add received finalized contracts to blockchain
-    // and return a block to be proposed
+    /// Add received finalized contracts to blockchain
+    /// and return a block to be proposed
     pub fn get_propose_block(&mut self, ctrs: Vec<Contract>) -> AgentResult<Block> {
         // Validate each contract and store it
         for ctr in ctrs.into_iter() {
@@ -322,8 +322,8 @@ impl Blockchain {
     /// It is illegal to add a block when there is a proposed
     /// block that has not been cleared, which will cause the method
     /// to panic.
-    pub fn add_block(&mut self, block: Block, subusers: u64) {
-        self.proposed.update(block, subusers);
+    pub fn add_proposal(&mut self, proposal: Proposal, subusers: u64) {
+        self.proposed.update(proposal, subusers);
     }
 }
 

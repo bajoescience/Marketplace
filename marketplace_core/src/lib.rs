@@ -34,10 +34,10 @@
 mod epoch_state;
 use std::{any::{Any, TypeId}, format, todo};
 
-use marketplace_helpers::{functions, objects::{AgentResult, IdHash}};
+use marketplace_helpers::{objects::{AgentResult}};
 use marketplace_ledger::{Blockchain, Mempool, State};
 use marketplace_p2p::Message;
-use marketplace_primitives::{Block, BlockHeader, Contract, JobContract, Proposer, ResultPtr, Verify, WorkPtr};
+use marketplace_primitives::{Contract, JobContract, Proposal, ResultPtr, Verify, WorkPtr};
 use marketplace_wallet::{Owner, voting};
 use marketplace_worker::Worker;
 
@@ -137,11 +137,11 @@ impl<T: State, W: Worker> Core<T, W> {
         }
 
         // Handle message with block payload
-        else if TypeId::of::<M>() == TypeId::of::<Block>() {
+        else if TypeId::of::<M>() == TypeId::of::<Proposal>() {
             // TODO: Change the unwrap to handle error without panicking!
-            let block = any_payload.downcast_ref::<Block>().unwrap();
+            let proposal = any_payload.downcast_ref::<Proposal>().unwrap();
 
-            self.handle_recv_block(block)
+            self.handle_proposal(proposal)
         }
 
         // TODO: Handle more types of network messages
@@ -234,14 +234,14 @@ impl<T: State, W: Worker> Core<T, W> {
     }
 
     // TODO: Handle received block
-    fn handle_recv_block(&mut self, block: &Block) -> AgentResult<()> {
+    fn handle_proposal(&mut self, proposal: &Proposal) -> AgentResult<()> {
         // Get subusers and blockheader
-        let subusers = self.get_subusers(block.header())?;
+        let subusers = self.get_subusers(&proposal)?;
 
         // Subusers must be greater than 0
         if subusers > 0 {
             // Add block to chain and update subusers
-            self.chain.add_block(block.clone(), subusers);
+            self.chain.add_proposal(proposal.clone(), subusers);
 
             // If subusers count is more than threshold, vote on block
             // as validator
@@ -252,7 +252,6 @@ impl<T: State, W: Worker> Core<T, W> {
         }
 
         todo!()
-        
     }
 
     // TODO: Handle new block header to the state
@@ -325,19 +324,16 @@ impl<T: State, W: Worker> Core<T, W> {
 
         // Add contracts to blockchain and get a block if chosen
         // as a proposer
-        let mut block = self.chain.get_propose_block(ctrs)?;
+        let block = self.chain.get_propose_block(ctrs)?;
 
-        // Attempt to be a proposer to 
-        // send block to the network.
-        let proposer = Proposer::build(&self.owner, &block.header().prev());
-
-        // Add proposer to block
-        block.add_proposer(proposer);
+        // Attempt proposal to 
+        // send to the network.
+        let proposal = Proposal::new(&self.owner, block);
         
         // If subusers is greater than 0, node has been chosen to propose
         // block.
-        if self.get_subusers(block.header())? > 0  {
-            // TODO: Send block to network
+        if self.get_subusers(&proposal)? > 0  {
+            // TODO: Send proposal to network
             todo!()
         };
 
@@ -351,18 +347,10 @@ impl<T: State, W: Worker> Core<T, W> {
         todo!()
     }
 
-    /// Get subusers using proposal and the block header
-    pub fn get_subusers(&self, header: &BlockHeader) -> AgentResult<u64> {
-        // Get proposer
-        let Some(proposer) = header.proposer() else {
-            return Err(format!(
-                "Error: Block {} does not contain proposer",
-                functions::from_bytes(&header.id())
-            ))
-        };
-
+    /// Get subusers using proposal
+    pub fn get_subusers(&self, proposal: &Proposal) -> AgentResult<u64> {
         // VRF output
-        let vrf_opt = proposer.verify(&header.prev())?;
+        let vrf_opt = proposal.get_vrf_hash()?;
 
         // User gdc balance
         let user_amount = self.state.get_gdc_balance(self.owner.as_lock());

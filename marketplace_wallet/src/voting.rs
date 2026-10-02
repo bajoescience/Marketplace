@@ -3,7 +3,14 @@ use marketplace_helpers::{functions, objects::{AgentResult, ID, WU}};
 use schnorrkel::{PublicKey, vrf::{VRF_PREOUT_LENGTH, VRF_PROOF_LENGTH, VRFPreOut, VRFProof}};
 use statrs::distribution::{Binomial, DiscreteCDF};
 
-const EXPECTED_VOTERS: u128 = 25;
+const EXPECTED_VOTERS: usize = 25;
+
+/// BFT threshold of Expected Voters Size
+pub const fn voting_threshold() -> usize {
+    let f = (EXPECTED_VOTERS - 1) / 3;
+
+    (2 * f) + 1
+}
 
 use crate::Owner;
 
@@ -118,7 +125,7 @@ pub fn subusers_count(vrf_opt: ID, user_amount: WU, total_currency: WU) -> Agent
     let c = functions::hashconstant(vrf_opt);
 
     // In the Algorand sortition model, p = expected_users / total_currency.
-    let p = functions::voter_probability(EXPECTED_VOTERS, total_currency);
+    let p = functions::voter_probability(EXPECTED_VOTERS as u128, total_currency);
 
     // Take the lower 64 bits as weight
     let weight = u64::try_from(user_amount.inner()).unwrap_or(u64::MAX);
