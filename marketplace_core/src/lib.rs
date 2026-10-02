@@ -241,7 +241,7 @@ impl<T: State, W: Worker> Core<T, W> {
         // Subusers must be greater than 0
         if subusers > 0 {
             // Add block to chain and update subusers
-            self.chain.add_proposal(proposal.clone(), subusers);
+            self.chain.add_proposal(proposal, subusers);
 
             // If subusers count is more than threshold, vote on block
             // as validator
@@ -339,6 +339,9 @@ impl<T: State, W: Worker> Core<T, W> {
 
         Ok(())
     }
+
+    /// Attempt to vote an a `Block` that has been observed
+    /// to be the highest new gdc addition to the chain
 
     /// Validate the `Block` with the highest gdc
     /// by sending it's `BlockHeader` to the network as a finalized `Block`

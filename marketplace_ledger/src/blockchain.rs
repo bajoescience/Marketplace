@@ -33,7 +33,7 @@ pub struct Blockchain {
     ctrs: Vec<Contract>,
 
     // Store proposed block
-    proposed: ProposedBlock
+    proposed: ProposalStore
 }
 
 impl Blockchain {
@@ -97,7 +97,7 @@ impl Blockchain {
         Ok(Self {
             db,
             ctrs: Vec::new(),
-            proposed: ProposedBlock::new(),
+            proposed: ProposalStore::new(),
         })
     }
 
@@ -322,38 +322,42 @@ impl Blockchain {
     /// It is illegal to add a block when there is a proposed
     /// block that has not been cleared, which will cause the method
     /// to panic.
-    pub fn add_proposal(&mut self, proposal: Proposal, subusers: u64) {
+    pub fn add_proposal(&mut self, proposal: &Proposal, subusers: u64) {
         self.proposed.update(proposal, subusers);
     }
 }
 
 // Store block and subuser count
-struct ProposedBlock {
-    block: Option<Block>,
+struct ProposalStore {
+    proposal: Option<Proposal>,
     subusers: u64
 }
 
-impl ProposedBlock {
+impl ProposalStore {
     fn new() -> Self {
         Self {
-            block: None,
+            proposal: None,
             subusers: 0,
         }
     }
 
-    fn update(&mut self, block: Block, subusers: u64) {
+    fn update(&mut self, proposal: &Proposal, subusers: u64) {
         // Update subuser count
         self.subusers += subusers;
 
-        match &self.block {
-            Some(current_block) => {
+        let Proposal { block, .. } = proposal;
+
+        match &self.proposal {
+            Some(current_proposal) => {
+                let Proposal {block: current_block, ..} = current_proposal;
+
                 // If new block has more new gdc than current block, replace block
                 if block.header().new_gdc() > current_block.header().new_gdc() {
-                    self.block = Some(block);
+                    self.proposal = Some(proposal.clone());
                 }
             },
             None => {
-                self.block = Some(block)
+                self.proposal = Some(proposal.clone())
             }
         };
     } 

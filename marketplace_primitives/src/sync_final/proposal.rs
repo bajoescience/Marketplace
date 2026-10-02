@@ -42,8 +42,8 @@ impl Proposer {
 
 #[derive(BorshSerialize, BorshDeserialize, Debug, Clone)]
 pub struct Proposal {
-    block: Block,
-    proposer: Proposer
+    pub block: Block,
+    pub voter: Proposer
 }
 
 impl Proposal {
@@ -52,7 +52,7 @@ impl Proposal {
 
         Self {
             block,
-            proposer: proposer
+            voter: proposer
         }
     }
 }
@@ -60,14 +60,14 @@ impl Proposal {
 // Getter methods
 impl Proposal {
     pub fn get_vrf_hash(&self) -> AgentResult<ID> {
-        self.proposer.verify(&self.block.id())
+        self.voter.verify(&self.block.id())
     }
 }
 
 // Verify proposer used block id as seed, and that the proposer is valid
 impl Verify for Proposal {
     fn verify(&self) -> AgentResult<()> {
-        self.proposer.verify(&self.block.id())?;
+        self.voter.verify(&self.block.id())?;
 
         Ok(())
     }

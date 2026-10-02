@@ -1,8 +1,6 @@
-use std::{collections::{HashMap, hash_map::Entry}, format};
-
 use borsh::{BorshDeserialize, BorshSerialize};
-use marketplace_helpers::{functions, objects::{AgentResult, ID, IdHash}};
-use marketplace_wallet::{Key, Lock, Owner, voting::{self, Role, VotingProof}};
+use marketplace_helpers::{objects::{AgentResult, ID, IdHash}};
+use marketplace_wallet::{Owner, voting::{self, Role, VotingProof}};
 
 use crate::{BlockHeader, Verify, WRVote};
 
@@ -53,49 +51,19 @@ pub struct Validated {
 
     // Validated blockheader
     header: BlockHeader,
-
-    // Prove ownership of Validated
-    #[borsh(skip)]
-    auth: HashMap<ID, Key>
 }
 
 // Getter methods
 impl Validated {
-    pub fn add_auth(&mut self, lock: Lock, key: Key, force: bool) -> AgentResult<()> {
-        match self.auth.entry(lock.id()) {
-            Entry::Vacant(entry) => {
-                entry.insert(key);
-            },
-            Entry::Occupied(mut entry) if force => {
-                entry.insert(key);
-            },
-            _ => {
-                return Err(format!(
-                    "Key already exists for Lock ID {}",
-                    functions::from_bytes(&lock.id())
-                ))
-            }
-        };
-
-        Ok(())
-    }
-
     /// Create a new Validated using the block id and validator
-    pub fn build(owner: &Owner, validator: Validator, header: BlockHeader) -> AgentResult<Self> {
-        let voter = owner.as_lock();
+    pub fn new(owner: &Owner, header: BlockHeader) -> Self {
+        // Build validator using block id (header hash)
+        let validator = Validator::new(owner, &header.id());
 
-        let mut validated = Self {
+        Self {
             header,
             voter: validator,
-            auth: HashMap::new(),
-        };
-
-        // Sign validated struct
-        let key = owner.sign(&validated.id());
-
-        validated.add_auth(voter, key, false)?;
-
-        Ok(validated)
+        }
     }
 }
 
@@ -103,24 +71,8 @@ impl Validated {
 // it only validates the structure of the validated
 impl Verify for Validated {
     fn verify(&self) -> AgentResult<()> {
-        // Verify validator using previous block hash
-        self.voter.verify(&self.header.prev())?;
-
-        // Create lock from validator public key
-        // which can be used to verify validated ownership
-        let lock = Lock::SIG(
-            functions::hash(self.voter.pk())
-        );
-
-        // Unlock lock to prove ownership
-        if let Some(key) = self.auth.get(&lock.id()) {
-            lock.unlock(key, &self.id())?;
-        } else {
-            return Err(format!(
-                "Error: Key does not exist for validator {}",
-                functions::from_bytes(&lock.id()), 
-            ));
-        };
+        // Verify validator using block hash
+        self.voter.verify(&self.header.id())?;
 
         Ok(())
     }
