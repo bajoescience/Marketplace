@@ -53,7 +53,6 @@ pub struct Validated {
     header: BlockHeader,
 }
 
-// Getter methods
 impl Validated {
     /// Create a new Validated using the block id and validator
     pub fn new(owner: &Owner, header: BlockHeader) -> Self {
@@ -64,6 +63,13 @@ impl Validated {
             header,
             voter: validator,
         }
+    }
+}
+
+// Getter methods
+impl Validated {
+    pub fn get_vrf_opt(&self) -> AgentResult<ID> {
+        self.voter.verify(&self.header.id())
     }
 }
 

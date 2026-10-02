@@ -1,8 +1,8 @@
 use marketplace_helpers::{functions, objects::{AgentResult, ID, IdHash, StdResult, WU}};
 
-use marketplace_primitives::{Block, Contract, Proposal, Verify};
+use marketplace_primitives::{Block, BlockHeader, Contract, Proposal, Validated, Verify, Whiteroom};
 
-use std::{format, panic, path::Path};
+use std::{format, path::Path, todo};
 
 use redb::{Database, Error, ReadableDatabase, ReadableTable, ReadableTableMetadata, TableDefinition};
 
@@ -33,7 +33,9 @@ pub struct Blockchain {
     ctrs: Vec<Contract>,
 
     // Store proposed block
-    proposed: ProposalStore
+    proposed: ProposalBlock,
+
+    // Store Validate in a whiteroom
 }
 
 impl Blockchain {
@@ -97,7 +99,7 @@ impl Blockchain {
         Ok(Self {
             db,
             ctrs: Vec::new(),
-            proposed: ProposalStore::new(),
+            proposed: ProposalBlock::new(),
         })
     }
 
@@ -300,7 +302,7 @@ impl Blockchain {
 
     /// Add received finalized contracts to blockchain
     /// and return a block to be proposed
-    pub fn get_propose_block(&mut self, ctrs: Vec<Contract>) -> AgentResult<Block> {
+    pub fn get_block_to_propose(&mut self, ctrs: Vec<Contract>) -> AgentResult<Block> {
         // Validate each contract and store it
         for ctr in ctrs.into_iter() {
             self.validate_contract(&ctr)?;
@@ -317,6 +319,12 @@ impl Blockchain {
         Ok(block)
     }
 
+    /// Fetch the proposal of the block with the highest new gdc observed,
+    /// and send the blockheader.
+    pub fn get_block_to_finalize(&self) -> Option<BlockHeader> {
+        self.proposed.block.as_ref().map(|block| block.header().clone())
+    }
+
     /// Add a proposed block to be cached
     /// 
     /// It is illegal to add a block when there is a proposed
@@ -328,15 +336,15 @@ impl Blockchain {
 }
 
 // Store block and subuser count
-struct ProposalStore {
-    proposal: Option<Proposal>,
+struct ProposalBlock {
+    block: Option<Block>,
     subusers: u64
 }
 
-impl ProposalStore {
+impl ProposalBlock {
     fn new() -> Self {
         Self {
-            proposal: None,
+            block: None,
             subusers: 0,
         }
     }
@@ -347,17 +355,15 @@ impl ProposalStore {
 
         let Proposal { block, .. } = proposal;
 
-        match &self.proposal {
-            Some(current_proposal) => {
-                let Proposal {block: current_block, ..} = current_proposal;
-
+        match &self.block {
+            Some(current_block) => {
                 // If new block has more new gdc than current block, replace block
                 if block.header().new_gdc() > current_block.header().new_gdc() {
-                    self.proposal = Some(proposal.clone());
+                    self.block = Some(block.clone());
                 }
             },
             None => {
-                self.proposal = Some(proposal.clone())
+                self.block = Some(block.clone())
             }
         };
     } 

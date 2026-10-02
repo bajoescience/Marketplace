@@ -34,10 +34,10 @@
 mod epoch_state;
 use std::{any::{Any, TypeId}, format, todo};
 
-use marketplace_helpers::{objects::{AgentResult}};
+use marketplace_helpers::objects::{AgentResult, ID};
 use marketplace_ledger::{Blockchain, Mempool, State};
 use marketplace_p2p::Message;
-use marketplace_primitives::{Contract, JobContract, Proposal, ResultPtr, Verify, WorkPtr};
+use marketplace_primitives::{Contract, JobContract, Proposal, ResultPtr, Validated, Verify, WorkPtr};
 use marketplace_wallet::{Owner, voting};
 use marketplace_worker::Worker;
 
@@ -236,7 +236,7 @@ impl<T: State, W: Worker> Core<T, W> {
     // TODO: Handle received block
     fn handle_proposal(&mut self, proposal: &Proposal) -> AgentResult<()> {
         // Get subusers and blockheader
-        let subusers = self.get_subusers(&proposal)?;
+        let subusers = self.get_subusers(proposal.get_vrf_opt()?)?;
 
         // Subusers must be greater than 0
         if subusers > 0 {
@@ -324,7 +324,7 @@ impl<T: State, W: Worker> Core<T, W> {
 
         // Add contracts to blockchain and get a block if chosen
         // as a proposer
-        let block = self.chain.get_propose_block(ctrs)?;
+        let block = self.chain.get_block_to_propose(ctrs)?;
 
         // Attempt proposal to 
         // send to the network.
@@ -332,7 +332,7 @@ impl<T: State, W: Worker> Core<T, W> {
         
         // If subusers is greater than 0, node has been chosen to propose
         // block.
-        if self.get_subusers(&proposal)? > 0  {
+        if self.get_subusers(proposal.get_vrf_opt()?)? > 0  {
             // TODO: Send proposal to network
             todo!()
         };
@@ -342,19 +342,30 @@ impl<T: State, W: Worker> Core<T, W> {
 
     /// Attempt to vote an a `Block` that has been observed
     /// to be the highest new gdc addition to the chain
-
-    /// Validate the `Block` with the highest gdc
     /// by sending it's `BlockHeader` to the network as a finalized `Block`
-    pub fn validate_block(&mut self) -> AgentResult<()> {
-        // Get finalized block from chain
+    pub fn finalize_block(&mut self) -> AgentResult<()> {
+        // Get finalized block header from chain
+        let Some(header) = self.chain.get_block_to_finalize() else {
+            return Err(format!(
+                "Error: No block to finalize"
+            ))
+        };
+
+        // Attempt validated to send to the network
+        let validated = Validated::new(&self.owner, header);
+
+        // If subusers is greater than 0, node has been chosen to vote on
+        // block being finalized.
+        if self.get_subusers(validated.get_vrf_opt()?)? > 0 {
+            // TODO: Send validated to network
+            todo!()
+        };
+
         todo!()
     }
 
-    /// Get subusers using proposal
-    pub fn get_subusers(&self, proposal: &Proposal) -> AgentResult<u64> {
-        // VRF output
-        let vrf_opt = proposal.get_vrf_hash()?;
-
+    /// Get subusers using VRF ouptput
+    pub fn get_subusers(&self, vrf_opt: ID) -> AgentResult<u64> {
         // User gdc balance
         let user_amount = self.state.get_gdc_balance(self.owner.as_lock());
 

@@ -59,7 +59,7 @@ impl Proposal {
 
 // Getter methods
 impl Proposal {
-    pub fn get_vrf_hash(&self) -> AgentResult<ID> {
+    pub fn get_vrf_opt(&self) -> AgentResult<ID> {
         self.voter.verify(&self.block.id())
     }
 }
