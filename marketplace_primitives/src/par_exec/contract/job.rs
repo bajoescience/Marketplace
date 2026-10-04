@@ -1,5 +1,5 @@
 use borsh::{BorshDeserialize, BorshSerialize};
-use marketplace_helpers::{functions, objects::{AgentResult, ID, IdHash, WU}};
+use marketplace_helpers::{functions, objects::{AgentResult, ID, IdHash, WU, WHITEROOM_SIZE}};
 use marketplace_wallet::crypto::Crypto;
 
 use crate::{BlockHeader, ResultPtr, Tx, Verify, Whiteroom, WorkPtr};
@@ -13,7 +13,7 @@ pub struct JobContract {
     // Input block header
     blk_hdr: BlockHeader,
     input: WorkPtr, 
-    output: Whiteroom<ResultPtr>,
+    output: Whiteroom<ResultPtr, WHITEROOM_SIZE>,
 }
 
 impl JobContract {
@@ -49,7 +49,7 @@ impl JobContract {
     }
 
     // Get whiteroom
-    pub fn output(&self) -> &Whiteroom<ResultPtr> {
+    pub fn output(&self) -> &Whiteroom<ResultPtr, WHITEROOM_SIZE> {
         &self.output
     }
 

@@ -117,6 +117,7 @@ impl Blockchain {
                         "Error: Block Header {} does not exist in Blockchain",
                         functions::from_bytes(&jobctr.get_blk_hdr().id()) 
                     ))
+              
                 };
 
                 // Verify Job contract
