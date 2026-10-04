@@ -1,10 +1,14 @@
 use marketplace_helpers::{functions, objects::{AgentResult, ID, IdHash, StdResult, WU}};
 
-use marketplace_primitives::{Block, BlockHeader, Contract, Proposal, Verify,};
+use marketplace_primitives::{Block, BlockHeader, Contract, Proposal, Validated, Verify, Whiteroom,};
+use marketplace_wallet::voting::EXPECTED_VOTERS;
 
 use std::{format, path::Path};
 
 use redb::{Database, Error, ReadableDatabase, ReadableTable, ReadableTableMetadata, TableDefinition};
+
+// MAX whiteroom members for validators
+const WHITEROOM_MAX: usize = functions::max_wr_size_from_expected(EXPECTED_VOTERS);
 
 /// Store blocks directly and address them by their id
 /// 
@@ -35,7 +39,8 @@ pub struct Blockchain {
     // Store proposed block
     proposed: ProposalBlock,
 
-    // Store Validate in a whiteroom
+    // Store Validate votes for blocks in a whiteroom
+    validated: Whiteroom<Validated, WHITEROOM_MAX>
 }
 
 impl Blockchain {
@@ -100,6 +105,7 @@ impl Blockchain {
             db,
             ctrs: Vec::new(),
             proposed: ProposalBlock::new(),
+            validated: Whiteroom::new(),
         })
     }
 
@@ -333,6 +339,13 @@ impl Blockchain {
     /// to panic.
     pub fn add_proposal(&mut self, proposal: &Proposal, subusers: u64) {
         self.proposed.update(proposal, subusers);
+    }
+
+    /// Add a validator of a block to be cached
+    pub fn add_validator(&mut self, validated: Validated, subusers: u64) -> AgentResult<()> {
+        self.validated.add_member(validated)?;
+
+        Ok(())
     }
 }
 

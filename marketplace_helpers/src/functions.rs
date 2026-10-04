@@ -3,41 +3,46 @@ use std::{todo};
 use sha3::{Digest, Sha3_256};
 use time::OffsetDateTime;
 
-use crate::objects::{ID, MIN_WORK_SIZE, VDF_CONSTANT, VRF_T, WHITEROOM_SIZE, WU};
+use crate::objects::{CONTRACT_WHITEROOM_SIZE, ID, MIN_WORK_SIZE, VDF_CONSTANT, VRF_T, WU};
 use alloy_primitives::{U256, U512};
 use rug::{Rational};
 
 /// BFT whiteroom size given f amounts of tolerable faulty nodes
-pub fn bft_from(f: usize) -> usize {
+pub const fn bft_from(f: usize) -> usize {
     (3 * f) + 1
 }
 
 /// BFT tolerable number of non-faulty nodes given an
 /// expected whiteroom size of exp
-pub fn bft_thresh(exp: usize) -> usize {
+pub const fn bft_thresh(exp: usize) -> usize {
     let f = (exp - 1) / 3;
 
     (2 * f) + 1
 }
 
-/// BFT threshold of Expected Whiteroom Size
-pub const fn whiteroom_threshold() -> usize {
-    let f = (WHITEROOM_SIZE - 1) / 3;
+/// BFT expected whiteroom size given a certain threshold
+pub const fn bft_expected_from_thresh(thresh: usize) -> usize {
+    // Get number of tolearble faulty nodes
+    let f = (thresh - 1) / 2;
 
-    (2 * f) + 1
+    bft_from(f)
 }
 
 /// Maximum whiteroom size given by 
 /// formula in the marketplace whitepaper.
 /// from an expected number of nodes
 pub const fn max_wr_size_from_expected(exp: usize) -> usize {
-    (2 * exp) - 1
+    let threshold = bft_thresh(exp);
+
+    (2 * threshold) - 1
 }
 
 /// Expected whiteroom size from  a maximum 
 /// whiteroom size max
 pub const fn expected_wr_from_max(max: usize) -> usize {
-    (max + 1) / 2
+    let thresh = (max + 1) / 2;
+
+    bft_expected_from_thresh(thresh)
 }
 
 pub const fn bft_thresh_from_max_wr_size(max: usize) -> usize {
@@ -60,7 +65,7 @@ pub fn vdf_difficulty(work_size: WU, vrf_threshold: VRF_T) -> u64 {
     let vrf_t = U256::from_be_bytes(vrf_threshold);
 
     // Invested Power (see whitepaper Page 5)
-    let ip = work_size / WHITEROOM_SIZE as u128;
+    let ip = work_size / CONTRACT_WHITEROOM_SIZE as u128;
 
     // Multiply VRF threshold by Invested power, then divide by 
     // max 256 bit number and get final VDF difficulty in u64
@@ -106,7 +111,7 @@ pub fn get_vrf(wr_avg_size: usize, prev_vrf: VRF_T) -> VRF_T {
     let whiteroom_avg_size = U256::from(wr_avg_size);
 
     // Expected Whiteroom size in 256 bit integer form.
-    let expected_wr_size = U256::from(WHITEROOM_SIZE);
+    let expected_wr_size = U256::from(CONTRACT_WHITEROOM_SIZE);
 
     ((vrf / whiteroom_avg_size).saturating_mul(expected_wr_size)).to_be_bytes()
 }
@@ -218,7 +223,7 @@ mod tests {
         let old_vrf = [255u8; 32];
 
         // Average whiteroom size of last epoch
-        let avg_wr_size = max_wr_size_from_expected(WHITEROOM_SIZE);
+        let avg_wr_size = max_wr_size_from_expected(CONTRACT_WHITEROOM_SIZE);
 
         let new_vrf = get_vrf(avg_wr_size, old_vrf);
 
@@ -232,7 +237,7 @@ mod tests {
         let old_vrf = [255u8; 32];
 
         // Average whiteroom size of last epoch
-        let avg_wr_size = whiteroom_threshold();
+        let avg_wr_size = bft_thresh(CONTRACT_WHITEROOM_SIZE);
 
         let new_vrf = get_vrf(avg_wr_size, old_vrf);
 

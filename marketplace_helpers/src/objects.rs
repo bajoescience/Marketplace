@@ -7,7 +7,7 @@ use num_format::{Locale, ToFormattedString};
 use super::functions;
 
 /// Expected whiteroom Size
-pub const WHITEROOM_SIZE: usize = (3 * 1) + 1;
+pub const CONTRACT_WHITEROOM_SIZE: usize = (3 * 1) + 1;
 
 // VDF constant
 pub const VDF_CONSTANT: u128 = 100000;

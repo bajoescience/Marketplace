@@ -3,7 +3,7 @@ use marketplace_helpers::{functions, objects::{AgentResult, ID, WU}};
 use schnorrkel::{PublicKey, vrf::{VRF_PREOUT_LENGTH, VRF_PROOF_LENGTH, VRFPreOut, VRFProof}};
 use statrs::distribution::{Binomial, DiscreteCDF};
 
-const EXPECTED_VOTERS: usize = 25;
+pub const EXPECTED_VOTERS: usize = 25;
 
 /// BFT threshold of Expected Voters Size
 pub const fn voting_threshold() -> usize {

@@ -1,8 +1,12 @@
 use borsh::{BorshDeserialize, BorshSerialize};
-use marketplace_helpers::{functions, objects::{AgentResult, ID, IdHash, WU, WHITEROOM_SIZE}};
+use marketplace_helpers::{functions, objects::{AgentResult, ID, IdHash, WU, CONTRACT_WHITEROOM_SIZE}};
 use marketplace_wallet::crypto::Crypto;
 
 use crate::{BlockHeader, ResultPtr, Tx, Verify, Whiteroom, WorkPtr};
+
+
+/// Maximum whiteroom Size
+const WHITEROOM_MAX: usize = functions::max_wr_size_from_expected(CONTRACT_WHITEROOM_SIZE);
 
 /// ## Job Contract
 /// 
@@ -13,7 +17,7 @@ pub struct JobContract {
     // Input block header
     blk_hdr: BlockHeader,
     input: WorkPtr, 
-    output: Whiteroom<ResultPtr, WHITEROOM_SIZE>,
+    output: Whiteroom<ResultPtr, WHITEROOM_MAX>,
 }
 
 impl JobContract {
@@ -49,7 +53,7 @@ impl JobContract {
     }
 
     // Get whiteroom
-    pub fn output(&self) -> &Whiteroom<ResultPtr, WHITEROOM_SIZE> {
+    pub fn output(&self) -> &Whiteroom<ResultPtr, WHITEROOM_MAX> {
         &self.output
     }
 
@@ -175,7 +179,7 @@ impl Verify for JobContract {
 pub mod tests {
     use std::{assert_eq, thread};
 
-use marketplace_helpers::{functions::{dum_bytes, wr_seed}, objects::{IdHash, WHITEROOM_SIZE, WU, WorkSize}};
+use marketplace_helpers::{functions::{dum_bytes, wr_seed}, objects::{IdHash, WU, WorkSize}};
 use marketplace_wallet::{Owner, crypto::Crypto};
 
 use crate::{BlockHeader, par_exec::{ExecuteTime, ResultInfo}, sync_final::block::BlockBody};
@@ -291,7 +295,7 @@ use super::*;
         let mut handles = Vec::new();
 
         // Assemble Whiteroom max results
-        for _ in 0..WHITEROOM_SIZE {
+        for _ in 0..CONTRACT_WHITEROOM_SIZE {
             let header = blk_hdr.clone();
             handles.push(thread::spawn(move || {
                 let wr_owner = Owner::new_sig();
@@ -313,12 +317,12 @@ use super::*;
         }
 
         // Total amount should be whiteroom max size
-        assert_eq!(ctr.output.len(), WHITEROOM_SIZE);
+        assert_eq!(ctr.output.len(), CONTRACT_WHITEROOM_SIZE);
 
         // Total gdc added to the system through block
         assert_eq!(
             ctr.new_gdc(), 
-            WU::try_from((WHITEROOM_SIZE as u128 - 1) * 10000).unwrap()
+            WU::try_from((CONTRACT_WHITEROOM_SIZE as u128 - 1) * 10000).unwrap()
         );
 
         // Contract should be validated and verified

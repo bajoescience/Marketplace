@@ -64,7 +64,7 @@ impl Verify for Contract {
 pub mod tests {
     use std::{assert_eq, thread};
 
-use marketplace_helpers::objects::{AgentResult, WHITEROOM_SIZE};
+use marketplace_helpers::objects::{AgentResult, CONTRACT_WHITEROOM_SIZE};
     use marketplace_wallet::Owner;
     use crate::{BlockHeader, Tx, TxIO, TxIdentifier, par_exec::contract::job::tests::{resultptr, workptr}};
     use super::*;
@@ -86,7 +86,7 @@ use marketplace_helpers::objects::{AgentResult, WHITEROOM_SIZE};
         let mut handles = Vec::new();
 
         // Assemble Whiteroom max results
-        for _ in 0..WHITEROOM_SIZE {
+        for _ in 0..CONTRACT_WHITEROOM_SIZE {
             let header = blk_hdr.clone();
 
             handles.push(thread::spawn(move || {

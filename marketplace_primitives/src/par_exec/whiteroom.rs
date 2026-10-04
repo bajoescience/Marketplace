@@ -142,7 +142,9 @@ mod tests {
     use std::assert_eq;
 
 use super::*;
-use marketplace_helpers::{objects::{WHITEROOM_SIZE}};
+use marketplace_helpers::{objects::{CONTRACT_WHITEROOM_SIZE}};
+
+    const MAX: usize = functions::max_wr_size_from_expected(CONTRACT_WHITEROOM_SIZE);
 
     #[derive(PartialEq)]
     // (number, vote)
@@ -162,7 +164,7 @@ use marketplace_helpers::{objects::{WHITEROOM_SIZE}};
             functions::dum_bytes()
         );
 
-        let mut whiteroom = Whiteroom::<_, WHITEROOM_SIZE>::new();
+        let mut whiteroom = Whiteroom::<_, MAX>::new();
 
         whiteroom.add_member(member)?;
 
@@ -184,7 +186,7 @@ use marketplace_helpers::{objects::{WHITEROOM_SIZE}};
             functions::dum_bytes()
         );
 
-        let mut whiteroom = Whiteroom::<_, WHITEROOM_SIZE>::new();
+        let mut whiteroom = Whiteroom::<_, MAX>::new();
 
         whiteroom.add_member(member0)?;
 
@@ -197,7 +199,7 @@ use marketplace_helpers::{objects::{WHITEROOM_SIZE}};
     // Test whiteroom consensus should work
     #[test]
     fn is_consensus_whiteroom() -> AgentResult<()> {
-        let mut wr = Whiteroom::<_, WHITEROOM_SIZE>::new();
+        let mut wr = Whiteroom::<_, MAX>::new();
 
         
         // Create 2 members
@@ -224,7 +226,7 @@ use marketplace_helpers::{objects::{WHITEROOM_SIZE}};
     // Test whiteroom non-consensus should fail
     #[test]
     fn is_non_consensus_whiteroom() -> AgentResult<()> {
-        let mut wr = Whiteroom::<_, WHITEROOM_SIZE>::new();
+        let mut wr = Whiteroom::<_, MAX>::new();
 
         // Testing 3(1) + 1 members
         // We create 2 agreeing members
