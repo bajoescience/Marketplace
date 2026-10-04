@@ -2,7 +2,7 @@ use std::{collections::{HashMap}, format};
 
 use arrayvec::ArrayVec;
 use borsh::{BorshDeserialize, BorshSerialize};
-use marketplace_helpers::{functions::{self}, objects::{AgentResult, ID}};
+use marketplace_helpers::{functions, objects::{AgentResult, ID}};
 
 // Consensus trait to prove what it means 
 // for a whiteroom to agree
@@ -14,6 +14,9 @@ pub trait WRVote: PartialEq {
 pub struct Whiteroom<T: WRVote, const MAX: usize> {
     list: ArrayVec<T, MAX>,
     votes: HashMap<ID, usize>,
+
+    // Expected Whiteroom size (usually 25)
+    expected: usize,
 }
 
 impl<T, const MAX: usize> Whiteroom<T, MAX>
@@ -25,6 +28,7 @@ where
         Self {
             list: ArrayVec::new(),
             votes: HashMap::new(),
+            expected: functions::expected_wr_from_max(MAX),
         }
     }
 }
@@ -61,12 +65,12 @@ where
 
     // Checks if current members have reached consensus
     pub fn is_consensus(&self) -> bool {
-        // Capacity 
-        let max_size = self.list.capacity();
+        // Expected whiteroom size 
+        let exp_size = self.expected;
 
         // Check if winning vote has greater count than threshold
         if let Some(winner) = self.winning_vote() {
-            if *winner.1 >= functions::bft_thresh(max_size) {
+            if *winner.1 >= functions::bft_thresh(exp_size) {
                 return true;
             }
         }
@@ -79,9 +83,9 @@ where
         // Whiteroom can only reach consensus when less than 2
         // results reach effective threshold which is 1 / 3
         // of nodes
-        let max_size = self.list.capacity();
+        let exp_size = self.expected;
 
-        let effective_thresh = max_size - functions::bft_thresh(max_size);
+        let effective_thresh = exp_size - functions::bft_thresh(exp_size);
 
         let count = self.votes
             .iter()

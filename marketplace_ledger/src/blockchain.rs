@@ -1,8 +1,8 @@
 use marketplace_helpers::{functions, objects::{AgentResult, ID, IdHash, StdResult, WU}};
 
-use marketplace_primitives::{Block, BlockHeader, Contract, Proposal, Validated, Verify, Whiteroom};
+use marketplace_primitives::{Block, BlockHeader, Contract, Proposal, Verify,};
 
-use std::{format, path::Path, todo};
+use std::{format, path::Path};
 
 use redb::{Database, Error, ReadableDatabase, ReadableTable, ReadableTableMetadata, TableDefinition};
 

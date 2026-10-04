@@ -5,16 +5,17 @@ use time::OffsetDateTime;
 
 use crate::objects::{ID, MIN_WORK_SIZE, VDF_CONSTANT, VRF_T, WHITEROOM_SIZE, WU};
 use alloy_primitives::{U256, U512};
-use rug::{Float, Integer, Rational};
+use rug::{Rational};
 
 /// BFT whiteroom size given f amounts of tolerable faulty nodes
 pub fn bft_from(f: usize) -> usize {
     (3 * f) + 1
 }
 
-/// BFT tolerable number of non-faulty nodes given a whiteroom size m
-pub fn bft_thresh(m: usize) -> usize {
-    let f = (m - 1) / 3;
+/// BFT tolerable number of non-faulty nodes given an
+/// expected whiteroom size of exp
+pub fn bft_thresh(exp: usize) -> usize {
+    let f = (exp - 1) / 3;
 
     (2 * f) + 1
 }
@@ -28,9 +29,20 @@ pub const fn whiteroom_threshold() -> usize {
 
 /// Maximum whiteroom size given by 
 /// formula in the marketplace whitepaper.
-pub const fn whiteroom_max_size() -> usize {
-    // Get whiteroom threshold size "s"
-    let s = whiteroom_threshold();
+/// from an expected number of nodes
+pub const fn max_wr_size_from_expected(exp: usize) -> usize {
+    (2 * exp) - 1
+}
+
+/// Expected whiteroom size from  a maximum 
+/// whiteroom size max
+pub const fn expected_wr_from_max(max: usize) -> usize {
+    (max + 1) / 2
+}
+
+pub const fn bft_thresh_from_max_wr_size(max: usize) -> usize {
+    // Get expected whiteroom size "s" from max
+    let s = expected_wr_from_max(max);
 
     // Return max size (see whitepaper)
     (2 * s) - 1
@@ -206,7 +218,7 @@ mod tests {
         let old_vrf = [255u8; 32];
 
         // Average whiteroom size of last epoch
-        let avg_wr_size = whiteroom_max_size();
+        let avg_wr_size = max_wr_size_from_expected(WHITEROOM_SIZE);
 
         let new_vrf = get_vrf(avg_wr_size, old_vrf);
 
