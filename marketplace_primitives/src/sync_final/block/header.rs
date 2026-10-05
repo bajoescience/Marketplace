@@ -1,7 +1,7 @@
 use borsh::{BorshDeserialize, BorshSerialize};
-use marketplace_helpers::{functions, objects::{ID, IdHash, VRF_T, WHITEROOM_SIZE, WU}};
+use marketplace_helpers::{functions, objects::{CONTRACT_WHITEROOM_SIZE, ID, IdHash, VRF_T, WU}};
 
-use crate::{WRVote, sync_final::block::BlockBody};
+use crate::{sync_final::block::BlockBody};
 
 #[derive(BorshSerialize, BorshDeserialize, Debug, Clone)]
 pub struct BlockHeader {
@@ -84,7 +84,7 @@ impl BlockHeader {
     pub fn vdf_diff(&self) -> u64 {
         // Work size is total work done on a job by
         // a whiteroom committee divided by whiteroom committee size
-        let work_size = self.average / WU::try_from(WHITEROOM_SIZE as u128).unwrap();
+        let work_size = self.average / WU::try_from(CONTRACT_WHITEROOM_SIZE as u128).unwrap();
 
         functions::vdf_difficulty(
             work_size, 
@@ -124,12 +124,6 @@ impl PartialEq for BlockHeader {
     }
 }
 
-impl WRVote for BlockHeader {
-    fn as_vote(&self) -> ID {
-        self.id()
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use marketplace_helpers::objects::IdHash;
@@ -148,7 +142,6 @@ mod tests {
         assert_eq!(header.new_gdc(), WU::GDC());
         assert_eq!(header.average(), WU::single());
         assert_eq!(header.vrf_t(), [255u8; 32]);
-        assert_eq!(header.as_vote(), header.id());
     }
 
     // A new header should reference its previous header and body-derived values.

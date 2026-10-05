@@ -8,11 +8,16 @@ use marketplace_helpers::{functions, objects::{AgentResult, ID}};
 // for a whiteroom to agree
 pub trait WRVote: PartialEq {
     fn as_vote(&self) -> ID;
+
+    // Number of votes self owns
+    fn votes(&self) -> usize;
 }
 
 #[derive(BorshSerialize, BorshDeserialize, Debug, Clone)]
 pub struct Whiteroom<T: WRVote, const MAX: usize> {
     list: ArrayVec<T, MAX>,
+
+    // A voter may weigh more than one votes, so that has to be taken into account
     votes: HashMap<ID, usize>,
 
     // Expected Whiteroom size (usually 25)
@@ -27,6 +32,8 @@ where
     pub fn new() -> Whiteroom<T, MAX> {
         Self {
             list: ArrayVec::new(),
+
+            // Each
             votes: HashMap::new(),
             expected: functions::expected_wr_from_max(MAX),
         }
@@ -38,9 +45,19 @@ impl<T, const MAX: usize> Whiteroom<T, MAX>
 where
     T: WRVote 
 {
+    /// Check if whiteroom is full
+    /// by amount of votes, not amount of individual whiteroom members
+    /// 
+    /// This means if the members contribute varying amount of votes, the whiteroom can 
+    /// be full before it reaches maximum voter capacity
+    /// 
+    /// Although once capacity is reached, then the whiteroom is always full
+    pub fn is_full(&self) -> bool {
+        self.list.is_full() || (self.len() >= self.list.capacity())
+    }
     // Whiteroom member count
     pub fn len(&self) -> usize {
-        self.list.len()
+        self.members().map(|voter| voter.votes()).sum()
     }
 
     // Whiteroom members
@@ -50,8 +67,7 @@ where
 
     // Gwt winning members
     pub fn winners(&self) -> impl Iterator<Item = &T> {
-        self.list
-            .iter()
+        self.members()
             .filter(
                 |member| {
                     if let Some(winning_vote) = self.winning_vote() {
@@ -113,7 +129,6 @@ impl<T, const MAX: usize> Whiteroom<T, MAX>
 where
     T: WRVote 
 {
-
     // Add a new whiteroom member
     pub fn add_member(&mut self, member: T) -> AgentResult<usize> {
         if self.list.is_full() {
@@ -123,7 +138,7 @@ where
         }
 
         // Increase whiteroom member vote's count
-        *self.votes.entry(member.as_vote()).or_insert(0) += 1;
+        *self.votes.entry(member.as_vote()).or_insert(0) += member.votes();
 
         // Ensure no duplicates
         if self.list.contains(&member) {
@@ -153,6 +168,10 @@ use marketplace_helpers::{objects::{CONTRACT_WHITEROOM_SIZE}};
     impl WRVote for TestMember {
         fn as_vote(&self) -> ID {
             self.1
+        }
+
+        fn votes(&self) -> usize {
+            1
         }
     }
 

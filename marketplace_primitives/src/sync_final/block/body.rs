@@ -1,6 +1,6 @@
 use std::vec;
 use borsh::{BorshDeserialize, BorshSerialize};
-use marketplace_helpers::{objects::{ID, IdHash, WHITEROOM_SIZE, WU}};
+use marketplace_helpers::{objects::{ID, IdHash, CONTRACT_WHITEROOM_SIZE, WU}};
 use rs_merkle::{MerkleTree, algorithms::Sha256};
 
 use crate::{Contract};
@@ -52,7 +52,7 @@ impl BlockBody {
         // this is to slash the VRF threshold by half
         // which is the most a VRF threshold can be reduced.
         if count == 0 {
-            return WHITEROOM_SIZE / 2
+            return CONTRACT_WHITEROOM_SIZE / 2
         }
 
         // Convert average to usize
@@ -98,7 +98,7 @@ impl BlockBody {
 #[cfg(test)]
 mod tests {
     use std::{assert_eq, thread};
-    use marketplace_helpers::objects::{AgentResult, WHITEROOM_SIZE};
+    use marketplace_helpers::objects::{AgentResult, CONTRACT_WHITEROOM_SIZE};
 use marketplace_wallet::Owner;
 
 use crate::{BlockHeader, JobContract};
@@ -123,7 +123,7 @@ use crate::{BlockHeader, JobContract};
         let mut handles = Vec::new();
 
         // Assemble Whiteroom results
-        for _ in 0..WHITEROOM_SIZE {
+        for _ in 0..CONTRACT_WHITEROOM_SIZE {
             let header = blk_hdr.clone();
             handles.push(thread::spawn(move || {
                 let wr_owner = Owner::new_sig();
@@ -162,7 +162,7 @@ use crate::{BlockHeader, JobContract};
     fn avg_wr_size_of_empty_block() {
         let block = BlockBody::new(Vec::new());
 
-        assert_eq!(block.wr_avg(), WHITEROOM_SIZE / 2)
+        assert_eq!(block.wr_avg(), CONTRACT_WHITEROOM_SIZE / 2)
     }
 
 
@@ -173,7 +173,7 @@ use crate::{BlockHeader, JobContract};
             vec![Contract::JOB(jobctr()?), Contract::JOB(jobctr()?), Contract::JOB(jobctr()?)]
         );
 
-        assert_eq!(block.wr_avg(), WHITEROOM_SIZE);
+        assert_eq!(block.wr_avg(), CONTRACT_WHITEROOM_SIZE);
         Ok(())
     }
 

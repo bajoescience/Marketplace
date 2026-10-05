@@ -51,17 +51,23 @@ pub struct Validated {
 
     // Validated blockheader
     header: BlockHeader,
+
+    // Store subuser count
+    // to be used as a vote count in
+    // whiteroom
+    subusers: usize,
 }
 
 impl Validated {
     /// Create a new Validated using the block id and validator
-    pub fn new(owner: &Owner, header: BlockHeader) -> Self {
+    pub fn new(owner: &Owner, header: BlockHeader, subusers: usize) -> Self {
         // Build validator using block id (header hash)
         let validator = Validator::new(owner, &header.id());
 
         Self {
             header,
             voter: validator,
+            subusers
         }
     }
 }
@@ -93,5 +99,9 @@ impl PartialEq for Validated {
 impl WRVote for Validated {
     fn as_vote(&self) -> ID {
         self.header.id()
+    }
+
+    fn votes(&self) -> usize {
+        self.subusers
     }
 }

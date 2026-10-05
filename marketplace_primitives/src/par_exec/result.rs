@@ -261,6 +261,11 @@ impl WRVote for ResultPtr {
     fn as_vote(&self) -> ID {
         self.result.id()
     }
+
+    // Each resultptr has only one vote
+    fn votes(&self) -> usize {
+        1
+    }
 }
 
 #[cfg(test)]
