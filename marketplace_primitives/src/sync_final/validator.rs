@@ -55,15 +55,12 @@ pub struct Validated {
     // Store subuser count
     // to be used as a vote count in
     // whiteroom
-    subusers: usize,
+    subusers: u64,
 }
 
 impl Validated {
     /// Create a new Validated using the block id and validator
-    pub fn new(owner: &Owner, header: BlockHeader, subusers: usize) -> Self {
-        // Build validator using block id (header hash)
-        let validator = Validator::new(owner, &header.id());
-
+    pub fn new(header: BlockHeader, validator: Validator, subusers: u64) -> Self {
         Self {
             header,
             voter: validator,
@@ -102,6 +99,6 @@ impl WRVote for Validated {
     }
 
     fn votes(&self) -> usize {
-        self.subusers
+        self.subusers as usize
     }
 }

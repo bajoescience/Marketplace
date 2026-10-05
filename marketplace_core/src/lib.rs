@@ -34,10 +34,10 @@
 mod epoch_state;
 use std::{any::{Any, TypeId}, format, todo};
 
-use marketplace_helpers::objects::{AgentResult, ID};
+use marketplace_helpers::objects::{AgentResult, ID, IdHash};
 use marketplace_ledger::{Blockchain, Mempool, State};
 use marketplace_p2p::Message;
-use marketplace_primitives::{Contract, JobContract, Proposal, ResultPtr, Validated, Verify, WorkPtr};
+use marketplace_primitives::{Contract, JobContract, Proposal, ResultPtr, Validated, Validator, Verify, WorkPtr};
 use marketplace_wallet::{Owner, voting};
 use marketplace_worker::Worker;
 
@@ -351,12 +351,20 @@ impl<T: State, W: Worker> Core<T, W> {
             ))
         };
 
-        // Attempt validated to send to the network
-        let validated = Validated::new(&self.owner, header);
+        // Build validator using block id (header hash)
+        let validator = Validator::new(&self.owner, &header.id());
 
+        // Get subusers using VRF output from validator
         // If subusers is greater than 0, node has been chosen to vote on
         // block being finalized.
-        if self.get_subusers(validated.get_vrf_opt()?)? > 0 {
+        let subusers = self.get_subusers(
+            validator.verify(&header.id())?
+        )?;
+
+        if subusers > 0 {
+            // Create validated to send to the network
+            let validated = Validated::new(header, validator, subusers);
+
             // TODO: Send validated to network
             todo!()
         };
