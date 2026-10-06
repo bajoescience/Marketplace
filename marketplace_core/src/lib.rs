@@ -144,6 +144,14 @@ impl<T: State, W: Worker> Core<T, W> {
             self.handle_proposal(proposal)
         }
 
+        // Handle Block validator payload
+        else if TypeId::of::<M>() == TypeId::of::<Validated>() {
+            // TODO: Change the unwrap to handle error without panicking!
+            let validated = any_payload.downcast_ref::<Validated>().unwrap();
+
+            self.handle_validator(validated)
+        }
+
         // TODO: Handle more types of network messages
 
         // Handle message that is not recognized by the network
@@ -245,13 +253,31 @@ impl<T: State, W: Worker> Core<T, W> {
 
             // If subusers count is more than threshold, vote on block
             // as validator
+            todo!()
         } else {
             return Err(format!(
                 "Err: Block is not a valid proposed block"
             ))
         }
+    }
 
-        todo!()
+    // Handle received validator
+    fn handle_validator(&mut self, validated: &Validated) -> AgentResult<()> {
+        // Get subusers and blockheader
+        let subusers = self.get_subusers(validated.get_vrf_opt()?)?;
+
+        // Subusers must be greater than 0
+        if subusers > 0 {
+            // Add block to chain and update subusers
+
+            // If subusers count is more than threshold, vote on block
+            // as validator
+            todo!()
+        } else {
+            return Err(format!(
+                "Err: Block is not a valid proposed block"
+            ))
+        }
     }
 
     // TODO: Handle new block header to the state
