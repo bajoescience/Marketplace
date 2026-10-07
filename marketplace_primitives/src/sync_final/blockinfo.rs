@@ -25,4 +25,23 @@ impl BlockInfo {
             validators
         }
     }
+
+    /// Create block from block bytes
+    pub fn from(bytes: &[u8]) -> Result<Self, std::io::Error> {
+        borsh::from_slice(bytes)
+    }
+
+    // Serialize
+    pub fn serialize(&self) -> Vec<u8> {
+        borsh::to_vec(&self)
+            .expect("Illegal: Error Serializing")
+    }
+}
+
+// Getter methods
+impl BlockInfo {
+    // Get block
+    pub fn block(&self) -> &Block {
+        &self.block
+    }
 }

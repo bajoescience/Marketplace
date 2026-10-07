@@ -32,9 +32,9 @@
 //! `Block` message
 
 mod epoch_state;
-use std::{any::{Any, TypeId}, format, time::Duration, todo};
+use std::{any::{Any, TypeId}, format, todo};
 
-use marketplace_helpers::objects::{AgentResult, EPOCH_DURATION, Epoch, ID, IdHash};
+use marketplace_helpers::objects::{AgentResult, Epoch, ID, IdHash};
 use marketplace_ledger::{Blockchain, Mempool, State};
 use marketplace_p2p::Message;
 use marketplace_primitives::{Contract, JobContract, Proposal, ResultPtr, Validated, Validator, Verify, WorkPtr};

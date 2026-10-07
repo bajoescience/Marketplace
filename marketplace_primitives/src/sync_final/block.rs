@@ -26,10 +26,7 @@ impl Block {
     /// An empty Vector can also be supplied, but it will 
     /// have a VRF_threshold that
     /// will ultimately be half the original
-    pub fn new(prev_blk_hdr: &BlockHeader, ctrs: Vec<Contract>) -> Self {
-        // Get block body
-        let body = BlockBody::new(ctrs);
-
+    pub fn new(prev_blk_hdr: &BlockHeader, body: BlockBody) -> Self {
         // Get block header
         let header = BlockHeader::new(prev_blk_hdr, &body);
 
@@ -125,7 +122,8 @@ use super::*;
     #[test]
     fn new_block_exposes_header_and_body() {
         let previous = BlockHeader::genesis();
-        let block = Block::new(&previous, Vec::new());
+        let body = BlockBody::new(Vec::new());
+        let block = Block::new(&previous, body);
 
         assert_eq!(block.body().len(), 0);
         assert_eq!(block.header().epoch(), previous.epoch() + 1);
@@ -149,7 +147,8 @@ use super::*;
     #[test]
     fn block_validates_against_previous_header() -> AgentResult<()> {
         let previous = BlockHeader::genesis();
-        let block = Block::new(&previous, Vec::new());
+        let body = BlockBody::new(Vec::new());
+        let block = Block::new(&previous, body);
 
         block.validate(&previous)
     }
@@ -158,7 +157,8 @@ use super::*;
     #[test]
     fn block_rejects_wrong_previous_header() {
         let previous = BlockHeader::genesis();
-        let block = Block::new(&previous, Vec::new());
+        let body = BlockBody::new(Vec::new());
+        let block = Block::new(&previous, body);
         let wrong_previous = BlockHeader::new(&previous, &BlockBody::new(Vec::new()));
 
         let err = block.validate(&wrong_previous).unwrap_err();
