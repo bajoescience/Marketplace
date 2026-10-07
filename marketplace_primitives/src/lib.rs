@@ -1,9 +1,9 @@
 // Parallel Execution
-mod par_exec;
+pub mod par_exec;
 
 
 // Synchronous finalization
-mod sync_final;
+pub mod sync_final;
 
 pub use self::par_exec::{
     Tx, Contract, TxIO, TxIdentifier, Whiteroom, 

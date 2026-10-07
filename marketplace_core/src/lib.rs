@@ -32,9 +32,9 @@
 //! `Block` message
 
 mod epoch_state;
-use std::{any::{Any, TypeId}, format, todo};
+use std::{any::{Any, TypeId}, format, time::Duration, todo};
 
-use marketplace_helpers::objects::{AgentResult, ID, IdHash};
+use marketplace_helpers::objects::{AgentResult, EPOCH_DURATION, Epoch, ID, IdHash};
 use marketplace_ledger::{Blockchain, Mempool, State};
 use marketplace_p2p::Message;
 use marketplace_primitives::{Contract, JobContract, Proposal, ResultPtr, Validated, Validator, Verify, WorkPtr};
@@ -339,18 +339,31 @@ impl<T: State, W: Worker> Core<T, W> {
 
 // Handle methods for blocks
 impl<T: State, W: Worker> Core<T, W> {
+    /// This is the action to be taken every epoch by the marketplace node.
+    /// 
+    /// This method takes a list of finalized `Contracts` from the network
+    /// and bundles it into a `Block`.
+    /// 
+    /// The `Block` is then added to the cached blocks in the blockchain
+    /// to be proposed.
+    /// 
+    /// This process happens every epoch in a constant loop
+    pub fn handle_epoch(&mut self, epoch: Epoch) -> AgentResult<()> {
+        // Get finalized contracts
+        let ctrs = self.mempool.get_pending_ctrs();
+
+        // Add contracts to blockchain as a blockbody to be stored in cache
+        // until time of proposal
+        self.chain.add_to_cache(ctrs, epoch)
+    }
+
     /// Try to generate a new `Block` form a list of finalized `Contracts`
     /// to send to the network
     /// 
     /// A `Block` can only be valid to send to the rest of the network
     /// if the current node is chosen as a block proposer
     pub fn propose_block(&mut self) -> AgentResult<()> {
-        // Get finalized contracts
-        let ctrs = self.mempool.get_pending_ctrs();
-
-        // Add contracts to blockchain and get a block if chosen
-        // as a proposer
-        let block = self.chain.get_block_to_propose(ctrs)?;
+        // Get block from blockchain cache
 
         // Attempt proposal to 
         // send to the network.

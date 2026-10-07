@@ -1,12 +1,12 @@
 use borsh::{BorshDeserialize, BorshSerialize};
-use marketplace_helpers::{functions, objects::{CONTRACT_WHITEROOM_SIZE, ID, IdHash, VRF_T, WU}};
+use marketplace_helpers::{functions, objects::{CONTRACT_WHITEROOM_SIZE, Epoch, ID, IdHash, VRF_T, WU}};
 
 use crate::{sync_final::block::BlockBody};
 
 #[derive(BorshSerialize, BorshDeserialize, Debug, Clone)]
 pub struct BlockHeader {
     // Epoch
-    epoch: u64,
+    epoch: Epoch,
 
     // Contract merkle root
     ctr_merkle_root: Option<ID>,

@@ -1,9 +1,9 @@
-use marketplace_helpers::{functions, objects::{AgentResult, ID, IdHash, StdResult, WU}};
+use marketplace_helpers::{functions, objects::{AgentResult, Epoch, ID, IdHash, StdResult, WU}};
 
-use marketplace_primitives::{Block, BlockHeader, Contract, Proposal, Validated, Verify, Whiteroom,};
+use marketplace_primitives::{Block, BlockHeader, Contract, Proposal, Validated, Verify, Whiteroom, sync_final::{self, BlockBody},};
 use marketplace_wallet::voting::EXPECTED_VOTERS;
 
-use std::{format, path::Path};
+use std::{collections::HashMap, format, path::Path};
 
 use redb::{Database, Error, ReadableDatabase, ReadableTable, ReadableTableMetadata, TableDefinition};
 
@@ -35,6 +35,9 @@ pub struct Blockchain {
 
     // Store finalized contracts
     ctrs: Vec<Contract>,
+
+    // Store block body of each epoch
+    cache: HashMap<Epoch, sync_final::BlockBody>,
 
     // Store proposed block
     proposed: ProposalBlock,
@@ -106,6 +109,7 @@ impl Blockchain {
             ctrs: Vec::new(),
             proposed: ProposalBlock::new(),
             validated: Whiteroom::new(),
+            cache: HashMap::new(),
         })
     }
 
@@ -261,6 +265,23 @@ impl Blockchain {
 
 // Setter methods
 impl Blockchain {
+    /// Add a blockbody to the blockchain cache every epoch, this blockbody
+    /// would be proposed by this node as a block when the network reaches that epoch
+    /// to agree on.
+    /// 
+    /// This methods takes a list of finalized contracts, creates a new block body, and adds 
+    /// it to block cache.
+    pub fn add_to_cache(&mut self, ctrs: Vec<Contract>, epoch: Epoch) -> AgentResult<()> {
+
+        // Validate each contract and store it
+        for ctr in ctrs.iter() {
+            self.validate_contract(ctr)?;
+        }
+
+        self.cache.insert(epoch, BlockBody::new(ctrs));
+        Ok(())
+    }
+
     // Add to file
     fn add_to_db(&mut self, blk: Block) -> StdResult<()> {
         let write_txn = self.db.begin_write()?;
