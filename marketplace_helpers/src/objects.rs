@@ -225,7 +225,7 @@ pub type StdResult<T> = Result<T, Box<dyn Error + 'static>>;
 pub type VRF_T = ID;
 
 // Work size
-#[derive(BorshSerialize, BorshDeserialize, Debug, Clone, Copy)]
+#[derive(BorshSerialize, BorshDeserialize, Debug, Clone, Copy, PartialOrd)]
 pub struct WorkSize(WU);
 
 impl WorkSize {
@@ -246,6 +246,12 @@ impl WorkSize {
 
     pub fn into(self) -> WU {
         self.0
+    }
+}
+
+impl PartialEq for WorkSize {
+    fn eq(&self, other: &Self) -> bool {
+        self.0 == other.0
     }
 }
 

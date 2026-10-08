@@ -6,7 +6,7 @@ pub mod par_exec;
 pub mod sync_final;
 
 pub use self::par_exec::{
-    Tx, Contract, TxIO, TxIdentifier, Whiteroom, 
+    Tx, Contract, TxIdentifier, Whiteroom, tx, 
     WRVote, WorkPtr, ResultPtr, JobContract, TxContract,
     ExecuteTime, ResultInfo
 };

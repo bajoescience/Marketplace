@@ -139,6 +139,7 @@ impl ResultPtr {
     }
 }
 
+// To ensure that there are no multiples in the whiteroom
 impl PartialEq for ResultPtr {
     fn eq(&self, other: &Self) -> bool {
         self.id() == other.id()
@@ -259,7 +260,7 @@ impl Verify for ResultPtr {
 // Each ResultPtr can be represented as a Whiteroom Vote
 impl WRVote for ResultPtr {
     fn as_vote(&self) -> ID {
-        self.result.id()
+        self.result().id()
     }
 
     // Each resultptr has only one vote

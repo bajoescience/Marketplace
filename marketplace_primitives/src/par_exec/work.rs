@@ -5,16 +5,11 @@
 //! storage network as described in the 
 //! Marketplace Whitepaper
 
-use std::collections::HashMap;
-use std::collections::hash_map::Entry;
-use std::format;
-
 use borsh::{BorshDeserialize, BorshSerialize};
-use marketplace_helpers::functions;
 use marketplace_helpers::objects::WorkSize;
-use marketplace_wallet::{Key, Lock};
-use crate::{Verify};
-use crate::helpers::objects::{ID, WorkAddr, AgentResult, IdHash};
+use marketplace_wallet::Lock;
+use crate::tx::TxOptRef;
+use crate::helpers::objects::{ID, WorkAddr};
 
 /// When to start executing work
 #[derive(BorshSerialize, BorshDeserialize, Debug, Clone)]
@@ -86,8 +81,12 @@ pub struct WorkPtr {
     // Work size in goldcoin
     size: WorkSize,
 
-    // Employer Whiteroom to withdraw money to execute from
-    emp_wr: Lock,
+    // Employer UTXOs
+    ipts: Vec<TxOptRef>,
+
+    // Remainder Account
+    // to receive any remainder amount
+    remainder: Lock,
 
     // Specific time to execute
     do_at: ExecuteTime,
@@ -95,11 +94,6 @@ pub struct WorkPtr {
     // ID of Latest Block Header at time of publishing
     // If block header is not latest ID, the job has expired.
     blk_hdr: ID,
-
-    // Authenticate Workptr
-    // Stores <Lock.id(), Key>
-    #[borsh(skip)]
-    auth: HashMap<ID, Key>
 }
 
 impl WorkPtr {
@@ -126,6 +120,9 @@ impl WorkPtr {
     /// // Employer
     /// let employer = Owner::new_sig();
     /// 
+    /// // Ipt transaction output
+    /// let ipts = vec![TxOprRef::new([255u8; 32], 0)];
+    /// 
     /// // ID of latest block header
     /// let blk_hdr = BlockHeader::genesis();
     /// 
@@ -133,6 +130,7 @@ impl WorkPtr {
     /// let mut workptr = WorkPtr::new(
     ///     work_address,
     ///     WorkSize::build(work_size).unwrap(),
+    ///     ipts,
     ///     employer.as_wr_lock(),
     ///     blk_hdr.id(),
     ///     do_at
@@ -148,7 +146,8 @@ impl WorkPtr {
     pub fn new(
         work_addr: ID, 
         size: WorkSize, 
-        emp_wr: Lock,
+        ipts: Vec<TxOptRef>,
+        remainder: Lock,
         blk_hdr: ID,
         do_at: ExecuteTime
     ) -> Self {
@@ -156,10 +155,10 @@ impl WorkPtr {
         Self {
             work_addr,
             size,
-            emp_wr,
+            ipts,
             blk_hdr,
             do_at,
-            auth: HashMap::new(),
+            remainder
         }
     }
 }
@@ -175,8 +174,13 @@ impl WorkPtr {
     }
 
     // Employer
-    pub fn emp_wr(&self) -> &Lock {
-        &self.emp_wr
+    pub fn ipts(&self) -> &Vec<TxOptRef> {
+        &self.ipts
+    }
+
+    // Remainder account
+    pub fn remainder(&self) -> Lock {
+        self.remainder
     }
 
     // Get Block header ID
@@ -191,174 +195,51 @@ impl WorkPtr {
 
 // Setter methods
 impl WorkPtr {
-    /// Authenticate a `WorkPtr` by adding Lock and Key to prove ownership
-    /// of a `WorkPtr` 
-    ///
-    ///  force parameter will overide any previous associated keys
-    pub fn add_auth(&mut self, lock: Lock, key: Key, force: bool) -> AgentResult<()> {
-        match self.auth.entry(lock.id()) {
-            Entry::Vacant(entry) => {
-                entry.insert(key);
-            },
-            Entry::Occupied(mut entry) if force => {
-                entry.insert(key);
-            },
-            Entry::Occupied(_) => {
-                return Err(format!(
-                    "Key already exists for Lock ID {}",
-                    functions::from_bytes(&lock.id())
-                ));
-            },  
-        }
-
-        Ok(())
-    }
 }
 
-// Verify work input
-impl Verify for WorkPtr {
-    fn verify(&self) -> AgentResult<()> {
-        // Prove ownership of whiteroom
-        let emp_wr = self.emp_wr();
+// Verify sturcture of work input
 
-        if let Some(key) = self.auth.get(&emp_wr.id()) {
-            emp_wr.unlock(key, &self.id())?;
-        } else {
-            return Err(format!(
-                "Error: Key does not exist for workptr {}",
-                functions::from_bytes(&emp_wr.id()), 
-            ));
-        };
-
-        Ok(())
-    }
-}
+// The verification of UTXOs is done by the state
+// when the workptr is passed through it.
 
 #[cfg(test)]
 mod tests {
 
-use marketplace_helpers::{functions::dum_bytes, objects::WU};
-use marketplace_wallet::{Owner};
+use std::vec;
 
-use crate::{BlockHeader};
+use marketplace_helpers::{objects::WU};
+use marketplace_wallet::Owner;
 
 use super::*;
-
-    // Invalid work pay
-    // should fail
-    #[test]
-    #[should_panic]
-    fn verify_invalid_whiteroom_work_ipt() {
-        let pay = WU::default();
-        let owner = Owner::new_sig();
-
-        let mut work_ptr = WorkPtr::new(
-            dum_bytes(), 
-            WorkSize::build(pay).unwrap(), 
-            owner.as_wr_lock(),
-            BlockHeader::genesis().id(),
-            ExecuteTime::NOW
-        );
-
-        // Sign workptr and add auth proof
-        let key = owner.sign(&work_ptr.id());
-        work_ptr.add_auth(owner.as_lock(), key, false).unwrap();
-
-        work_ptr.verify().unwrap();
-    }
-
-    // Verify work_ptr with valid work size
-    #[test]
-    fn verify_valid_work_ptr() -> AgentResult<()> {
-        let pay = WU::try_from(20000).unwrap();
-        let owner = Owner::new_sig();
-
-        let mut work_ptr = WorkPtr::new(
-            dum_bytes(), 
-            WorkSize::build(pay).unwrap(), 
-            owner.as_wr_lock(), 
-            BlockHeader::genesis().id(),
-            ExecuteTime::NOW
-        );
-
-        // Sign workptr and add auth proof
-        let key = owner.sign(&work_ptr.id());
-        work_ptr.add_auth(owner.as_wr_lock(), key, false).unwrap();
-
-        work_ptr.verify()
-    }
-
     // Work pointer getters should return the values supplied at construction.
     #[test]
     fn work_pointer_getters() {
         let owner = Owner::new_sig();
+
         let work_addr = [1u8; 32];
         let blk_hdr = [2u8; 32];
         let size = WorkSize::build(WU::try_from(20000).unwrap()).unwrap();
         let work_ptr = WorkPtr::new(
             work_addr,
             size,
-            owner.as_wr_lock(),
+            vec![
+                TxOptRef::new([255; 32], 0)
+                ],
+            owner.as_lock(),
             blk_hdr,
             ExecuteTime::AFTER(10),
         );
 
         assert_eq!(work_ptr.work_addr(), &work_addr);
         assert_eq!(work_ptr.work_size().into(), size.into());
-        assert_eq!(work_ptr.emp_wr(), &owner.as_wr_lock());
+        assert_eq!(
+            work_ptr.ipts(), 
+            &vec![
+                TxOptRef::new([255; 32], 0)
+            ]
+        );
         assert_eq!(work_ptr.blk_hdr(), &blk_hdr);
         assert!(matches!(work_ptr.do_at(), ExecuteTime::AFTER(10)));
     }
 
-    // Authentication with the same lock must be rejected unless forced.
-    #[test]
-    fn work_pointer_auth_can_be_replaced_when_forced() -> AgentResult<()> {
-        let owner = Owner::new_sig();
-        let replacement_owner = Owner::new_sig();
-        let mut work_ptr = WorkPtr::new(
-            [1u8; 32],
-            WorkSize::build(WU::try_from(20000).unwrap()).unwrap(),
-            owner.as_wr_lock(),
-            [2u8; 32],
-            ExecuteTime::NOW,
-        );
-
-        work_ptr.add_auth(
-            owner.as_wr_lock(),
-            owner.sign(&work_ptr.id()),
-            false,
-        )?;
-        let err = work_ptr
-            .add_auth(
-                owner.as_wr_lock(),
-                replacement_owner.sign(&work_ptr.id()),
-                false,
-            )
-            .unwrap_err();
-        assert!(err.starts_with("Key already exists for Lock ID "));
-
-        work_ptr.add_auth(
-            owner.as_wr_lock(),
-            owner.sign(&work_ptr.id()),
-            true,
-        )?;
-        work_ptr.verify()
-    }
-
-    // Work pointer verification must fail when no authentication is supplied.
-    #[test]
-    fn work_pointer_requires_authentication() {
-        let owner = Owner::new_sig();
-        let work_ptr = WorkPtr::new(
-            [1u8; 32],
-            WorkSize::build(WU::try_from(20000).unwrap()).unwrap(),
-            owner.as_wr_lock(),
-            [2u8; 32],
-            ExecuteTime::NOW,
-        );
-
-        let err = work_ptr.verify().unwrap_err();
-        assert!(err.contains("Error: Key does not exist for workptr"));
-    }
-    
 }

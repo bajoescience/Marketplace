@@ -1,6 +1,8 @@
+use std::collections::{HashMap, hash_map::Entry};
+
 use borsh::{BorshDeserialize, BorshSerialize};
-use marketplace_helpers::{functions, objects::{AgentResult, ID, IdHash, WU, CONTRACT_WHITEROOM_SIZE}};
-use marketplace_wallet::crypto::Crypto;
+use marketplace_helpers::{functions, objects::{AgentResult, CONTRACT_WHITEROOM_SIZE, ID, IdHash, WU, WorkSize}};
+use marketplace_wallet::{Key, Lock, crypto::Crypto};
 
 use crate::{BlockHeader, ResultPtr, Tx, Verify, Whiteroom, WorkPtr};
 
@@ -18,6 +20,12 @@ pub struct JobContract {
     blk_hdr: BlockHeader,
     input: WorkPtr, 
     output: Whiteroom<ResultPtr, WHITEROOM_MAX>,
+
+    // Authenticate JobContract
+    // by locking workptr and
+    // Stores <Lock.id(), Key>
+    #[borsh(skip)]
+    auth: HashMap<ID, Key>
 }
 
 impl JobContract {
@@ -26,6 +34,7 @@ impl JobContract {
             blk_hdr,
             input,
             output: Whiteroom::new(),
+            auth: HashMap::new(),
         }
     }
 }
@@ -67,13 +76,30 @@ impl JobContract {
     }
 
     // Create transactions for results in Contract
-    pub fn get_tx(&self) -> Tx {
+    pub fn get_tx(&self) -> AgentResult<Tx> {
         Tx::from_contract(0, self)
     }
 
     // Get first result pointer
     pub fn first_result(&self) -> Option<&ResultPtr> {
         self.output.members().next()
+    }
+
+    /// Get amount spent by winning whiteroom members
+    /// 
+    /// there may be no winning whiteroom result, in that case
+    /// method will return Error.
+    pub fn spent(&self) -> AgentResult<WorkSize> {
+        self.output()
+            .winners()
+            .next()
+            .map(
+                |resultptr| 
+                resultptr.result().spent()
+            )
+            .ok_or(
+                format!("Err: Whiteroom has no winning node")
+            )
     }
 }
 
@@ -95,7 +121,7 @@ impl JobContract {
     /// (Sum of Whiteroom pay) - Job pay
     pub fn new_gdc(&self) -> WU {
         // Sum
-        let wr_pay_sum: WU = self.output.members()
+        let wr_pay_sum: WU = self.output.winners()
             .map(|resptr| resptr.result().spent().into())
             .sum();
         
@@ -120,7 +146,7 @@ impl JobContract {
         // Ensure input work size is more than output work size
         if result.result().spent().into() > self.input.work_size().into() {
             return Err(format!(
-                "Error: Result must spend less than commites work pay."
+                "Error: Result must not spend more than work pay."
             ))
         } 
 
@@ -154,13 +180,32 @@ impl JobContract {
         // Attempt to add to whiteroom
         self.output.add_member(result)
     }
+
+    // force parameter will overide any previous associated keys
+    pub fn add_auth(&mut self, lock: Lock, key: Key, force: bool) -> AgentResult<()> {
+        match self.auth.entry(lock.id()) {
+            Entry::Vacant(entry) => {
+                entry.insert(key);
+            },
+            Entry::Occupied(mut entry) if force => {
+                entry.insert(key);
+            },
+            Entry::Occupied(_) => {
+                return Err(format!(
+                    "Key already exists for Lock ID {}",
+                    functions::from_bytes(&lock.id())
+                ));
+            },  
+        }
+
+        Ok(())
+    }
 }
 
 impl Verify for JobContract {
     fn verify(&self) -> AgentResult<()> {
         // INPUTS
-        // Verify work input
-        self.input.verify()?;
+        // Ensure that 
 
         // OUTPUTS
         // Ensure that whiteroom has reached consensus
@@ -177,12 +222,12 @@ impl Verify for JobContract {
 
 #[cfg(test)]
 pub mod tests {
-    use std::{assert_eq, thread};
+    use std::{assert_eq, thread, vec};
 
 use marketplace_helpers::{functions::{dum_bytes, wr_seed}, objects::{IdHash, WU, WorkSize}};
 use marketplace_wallet::{Owner, crypto::Crypto};
 
-use crate::{BlockHeader, par_exec::{ExecuteTime, ResultInfo}, sync_final::block::BlockBody};
+use crate::{BlockHeader, par_exec::{ExecuteTime, ResultInfo}, sync_final::block::BlockBody, tx::TxOptRef};
 
 use super::*;
 
@@ -202,23 +247,18 @@ use super::*;
     
     // WorkPtr
     pub fn workptr(owner: &Owner, blk_hdr: ID) -> WorkPtr {
-        let mut workptr = WorkPtr::new(
+        WorkPtr::new(
             dum_bytes(), 
             work_pay().1,
+            vec![
+                TxOptRef::new(
+                    [255u8; 32], 
+                    0
+                )],
             owner.as_wr_lock(),
             blk_hdr, 
             ExecuteTime::NOW
-        );
-
-        // Sign workptr
-        let key = owner.sign(&workptr.id());
-        workptr.add_auth(
-            owner.as_wr_lock(), 
-            key, 
-            false
-        ).unwrap();
-
-        workptr
+        )
     }
 
     // ResultPtr
@@ -259,6 +299,14 @@ use super::*;
         // Input
         let workptr = workptr(&ipt_owner, blk_hdr.id());
         let mut ctr = JobContract::new(workptr, blk_hdr.clone());
+
+        // Sign workptr and add to ctr
+        let key = ipt_owner.sign(&ctr.input().id());
+        ctr.add_auth(
+            ipt_owner.as_wr_lock(), 
+            key, 
+            false
+        ).unwrap();
 
         // Result
         let result_ptr = resultptr(

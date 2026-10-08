@@ -66,9 +66,6 @@ impl Verify for TxContract {
         for tx in &self.bill {
             // Verify Tx
             tx.verify()?;
-
-            // Unlock tx
-            tx.unlock(&self.auth, &self.id())?;
         }
 
         Ok(())
@@ -82,7 +79,7 @@ pub mod tests {
 use marketplace_helpers::{ objects::{IdHash, WU}};
 use marketplace_wallet::{Owner};
 
-use crate::{ TxIO, TxIdentifier};
+use crate::{ TxIdentifier, tx::{TxOpt, TxOptRef}};
 
 use super::*;
 
@@ -92,11 +89,11 @@ use super::*;
         let owner = Owner::new_sig();
 
         let ipts = vec![
-            TxIO::new(owner.as_lock(), WU::try_from(20000).unwrap())
+            TxOptRef::new([255; 32], 0)
         ];
 
         let opts = Some(vec![
-            TxIO::new(owner.as_lock(), WU::try_from(20000).unwrap())
+            TxOpt::new(owner.as_lock(), WU::try_from(20000).unwrap())
         ]);
         
         let tx = Tx::new(0, TxIdentifier::COIN, Some(ipts), opts);
@@ -117,8 +114,8 @@ use super::*;
         let tx = Tx::new(
             0,
             TxIdentifier::COIN,
-            Some(vec![TxIO::new(owner.as_lock(), amount)]),
-            Some(vec![TxIO::new(owner.as_lock(), amount)]),
+            Some(vec![TxOptRef::new([255; 32], 0)]),
+            Some(vec![TxOpt::new(owner.as_lock(), amount)]),
         );
         let contract = TxContract::new(vec![tx.clone()]);
 
@@ -144,23 +141,6 @@ use super::*;
             owner.sign(&contract.id()),
             true,
         )
-    }
-
-    // Verification should fail when a transaction contract lacks input authentication.
-    #[test]
-    fn transaction_contract_requires_authentication() {
-        let owner = Owner::new_sig();
-        let amount = WU::try_from(20000).unwrap();
-        let tx = Tx::new(
-            0,
-            TxIdentifier::COIN,
-            Some(vec![TxIO::new(owner.as_lock(), amount)]),
-            Some(vec![TxIO::new(owner.as_lock(), amount)]),
-        );
-        let contract = TxContract::new(vec![tx]);
-
-        let err = contract.verify().unwrap_err();
-        assert!(err.contains("Error: Key does not exist for input"));
     }
 
     // Genesis transaction contracts should contain the native and token genesis transactions.

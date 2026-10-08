@@ -66,7 +66,9 @@ pub mod tests {
 
 use marketplace_helpers::objects::{AgentResult, CONTRACT_WHITEROOM_SIZE};
     use marketplace_wallet::Owner;
-    use crate::{BlockHeader, Tx, TxIO, TxIdentifier, par_exec::contract::job::tests::{resultptr, workptr}};
+    use crate::{
+        BlockHeader, Tx, TxIdentifier, par_exec::{contract::job::tests::{resultptr, workptr}}, tx::{TxOpt, TxOptRef}
+    };
     use super::*;
 
     // Test Job contract
@@ -136,11 +138,11 @@ use marketplace_helpers::objects::{AgentResult, CONTRACT_WHITEROOM_SIZE};
         let owner = Owner::new_sig();
 
         let ipts = vec![
-            TxIO::new(owner.as_lock(), WU::try_from(20000).unwrap())
+            TxOptRef::new([255; 32], 0)
         ];
 
         let opts = Some(vec![
-            TxIO::new(owner.as_lock(), WU::try_from(20000).unwrap())
+            TxOpt::new(owner.as_lock(), WU::try_from(20000).unwrap())
         ]);
         
         let tx = Tx::new(0, TxIdentifier::COIN, Some(ipts), opts);
