@@ -1,25 +1,22 @@
 use std::{collections::{HashMap, HashSet}, format};
 
-use marketplace_helpers::{functions, objects::{AgentResult, ID, IdHash}};
-use marketplace_primitives::{Contract, ResultPtr};
+use marketplace_helpers::{functions, objects::{AgentResult, ID}};
+use marketplace_primitives::{JobContract, ResultPtr};
 
-/// # Mempool
+/// # Jobs
 /// 
-/// The `Mempool` is the Live State of the marketplace where live jobs and 
-/// unfinalized transactions are stored.
-///
-/// The `Mempool` takes the Unspent Transaction  Output (UTXO) state from the blockchain,
-pub struct Mempool {
-    // This is where jobs and contracts are kept
-    // Each contract is referenced by it's work pointer id
-    ctrs: HashMap<ID, Contract>,
+/// The `Jobs` is the Live State of the marketplace where live jobs are stored and updated.
+pub struct Jobs {
+    // This is where jobs are kept
+    // Each job contract is referenced by it's work pointer id
+    ctrs: HashMap<ID, JobContract>,
 
-    // complete contracts id's
-    // pending finalization
+    // finalized jobs to be stored in mempool
+    // pending block inclusion
     ready_ctrs: HashSet<ID>,
 }
 
-impl Mempool {
+impl Jobs {
     pub fn new() -> Self {
         Self {
             ctrs: HashMap::new(),
@@ -29,13 +26,13 @@ impl Mempool {
 }
 
 // Getter methods
-impl Mempool {
-    /// Get the `Contracts` that are ready to be finalized
+impl Jobs {
+    /// Get the `JobContracts` that are ready to be finalized
     /// and added to a new `Block`
-    pub fn get_pending_ctrs(&mut self) -> Vec<Contract> {
+    pub fn get_pending_ctrs(&mut self) -> Vec<JobContract> {
         let mut ctrs = Vec::new();
 
-        // Get contract form Hashmap
+        // Get contract from Hashmap
         // using contract id in ready_ctrs list
         for ctr_id in self.ready_ctrs.iter() {
             let ctr = self.ctrs.remove(ctr_id)
@@ -51,15 +48,15 @@ impl Mempool {
         ctrs
     }
 
-    /// Take ownership of a `Job` from the `Mempool`
-    pub fn take_job(&mut self, ctr_id: ID) -> Option<Contract> {
+    /// Take ownership of a `Job` from the `Jobs`
+    pub fn take_job(&mut self, ctr_id: ID) -> Option<JobContract> {
         self.ctrs.remove(&ctr_id)
     }
 }
 
 // Setter methods
-impl Mempool {
-    /// Add a new `Contract` to `Mempool`
+impl Jobs {
+    /// Add a new `Contract` to `Jobs`
     /// 
     /// **Note:**
     /// 
@@ -67,19 +64,8 @@ impl Mempool {
     /// ready to be finalized.
     /// 
     /// The same is not true for a `Job Contract`.
-    pub fn add_job(&mut self, ctr: Contract) {
-        let id = match &ctr {
-            Contract::JOB(jobctr) => jobctr.work_id(),
-
-            // Tx Contracts are always considered finalized
-            // We add it to final contracts
-            Contract::TX(txctr) => {
-                let id = txctr.id();
-                self.ready_ctrs.insert(id);
-
-                id
-            },
-        };
+    pub fn add_job(&mut self, ctr: JobContract) {
+        let id = ctr.work_id();
 
         self.ctrs.insert(id, ctr);
     }
@@ -92,7 +78,7 @@ impl Mempool {
         let work_id = resptr.work_id();
 
         // Check if contract exists
-        let Some(Contract::JOB(jobctr)) = self.ctrs.get_mut(&work_id) else {
+        let Some(jobctr) = self.ctrs.get_mut(&work_id) else {
             return Err(format!(
                 "Error: Job with work id {} does not exist",
                 functions::from_bytes(&resptr.work_id())
@@ -120,18 +106,12 @@ impl Mempool {
 
     }
 
-    /// Return `Contracts` to `Mempool`
+    /// Return `Contracts` to `Jobs`
     /// which where not finalized in a block.
-    pub fn return_ctrs(&mut self, ctrs: Vec<Contract>) {
+    pub fn return_ctrs(&mut self, ctrs: Vec<JobContract>) {
         for ctr in ctrs {
             // Get contract id
-            let id = match &ctr {
-                Contract::JOB(jobctr) => jobctr.work_id(),
-    
-                // Tx Contracts are always considered finalized
-                // We add it to final contracts
-                Contract::TX(txctr) => txctr.id()
-            };
+            let id = ctr.work_id();
 
             // Add Contract to ready contracts
             self.ready_ctrs.insert(id);
@@ -144,7 +124,7 @@ impl Mempool {
 mod tests {
     use super::*;
 
-    // TODO: Add a contract to mempool
+    // TODO: Add a contract to Jobs
     // both Job and Tx contracts
 
     // TODO: Update Job contract with Result Pointer

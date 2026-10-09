@@ -1,8 +1,8 @@
 mod state;
-mod mempool;
+mod job;
 mod blockchain;
 
 pub use state::{State};
-pub use mempool::Mempool;
+pub use job::Jobs;
 pub use blockchain::Blockchain;
 

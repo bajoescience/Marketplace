@@ -17,17 +17,6 @@ pub enum Contract {
 }
 
 impl Contract {
-    // pub fn as_tx(&self) -> impl IntoIterator<Item = Tx> {
-    //     match self {
-    //         Self::JOB(jobctr) => {
-    //             jobctr.get_tx()
-    //         },
-    //         Self::TX(txctr) => {
-    //             txctr.owned_tx()
-    //         }
-    //     }
-    // }
-
     // Genesis Contract
     pub fn genesis() -> Self {
         Self::TX(TxContract::genesis())
@@ -42,7 +31,7 @@ impl Contract {
         }
     }
 
-    pub fn ctr_id(&self) -> ID {
+    pub fn id(&self) -> ID {
         match self {
             Self::JOB(jobctr) => jobctr.work_id(),
             Self::TX(txctr) => txctr.id()
@@ -129,7 +118,7 @@ use marketplace_helpers::objects::{AgentResult, CONTRACT_WHITEROOM_SIZE};
 
         let ctr = Contract::JOB(jobctr);
 
-        assert_eq!(ctr.ctr_id(), id);
+        assert_eq!(ctr.id(), id);
         Ok(())
     }
 
@@ -184,7 +173,7 @@ use marketplace_helpers::objects::{AgentResult, CONTRACT_WHITEROOM_SIZE};
         let expected_id = tx_contract.id();
         let contract = Contract::TX(tx_contract);
 
-        assert_eq!(contract.ctr_id(), expected_id);
+        assert_eq!(contract.id(), expected_id);
         Ok(())
     }
 

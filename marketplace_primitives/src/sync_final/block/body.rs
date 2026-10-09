@@ -1,6 +1,6 @@
 use std::vec;
 use borsh::{BorshDeserialize, BorshSerialize};
-use marketplace_helpers::{objects::{ID, IdHash, CONTRACT_WHITEROOM_SIZE, WU}};
+use marketplace_helpers::{objects::{ID, CONTRACT_WHITEROOM_SIZE, WU}};
 use rs_merkle::{MerkleTree, algorithms::Sha256};
 
 use crate::{Contract};
@@ -98,7 +98,7 @@ impl BlockBody {
 #[cfg(test)]
 mod tests {
     use std::{assert_eq, thread};
-    use marketplace_helpers::objects::{AgentResult, CONTRACT_WHITEROOM_SIZE};
+    use marketplace_helpers::objects::{AgentResult, CONTRACT_WHITEROOM_SIZE, IdHash};
 use marketplace_wallet::Owner;
 
 use crate::{BlockHeader, JobContract};
