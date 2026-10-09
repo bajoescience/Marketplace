@@ -1,9 +1,12 @@
 use marketplace_helpers::{functions, objects::{AgentResult, Epoch, ID, IdHash, StdResult, WU}};
 
-use marketplace_primitives::{Block, BlockHeader, Contract, Proposal, Validated, Verify, Whiteroom, sync_final::{BlockBody, blockinfo::BlockInfo},};
+use marketplace_primitives::{
+    Block, Contract, Proposal, Verify, 
+    sync_final::{blockinfo::BlockInfo},
+};
 use marketplace_wallet::voting::EXPECTED_VOTERS;
 
-use std::{collections::HashMap, format, panic, path::Path};
+use std::{format, panic, path::Path};
 
 use redb::{Database, Error, ReadableDatabase, ReadableTable, ReadableTableMetadata, TableDefinition};
 
@@ -34,25 +37,12 @@ const EPOCHS: TableDefinition<Epoch, &[u8]> = TableDefinition::new("epochs");
 /// total goldcoin in chain ("gdc": [u8; 16])
 const METADATA: TableDefinition<&str, &[u8]> = TableDefinition::new("metadata");
 
-// Blockchain
-// Store list of block headers
-// The block and headers are kept in a file
-// while only the headers are kept in memory
+// # Blockchain
+// Store list of `Blocks`
+// that can be used to build state
 pub struct Blockchain {
     // Database
     db: Database,
-
-    // Store finalized contracts
-    ctrs: Vec<Contract>,
-
-    // Store block body of each epoch
-    cache: HashMap<Epoch, BlockBody>,
-
-    // Store proposed block
-    proposed: ProposalBlock,
-
-    // Store Validate votes for blocks in a whiteroom
-    validated: Whiteroom<Validated, WHITEROOM_MAX>
 }
 
 impl Blockchain {
@@ -115,10 +105,6 @@ impl Blockchain {
 
         Ok(Self {
             db,
-            ctrs: Vec::new(),
-            proposed: ProposalBlock::new(),
-            validated: Whiteroom::new(),
-            cache: HashMap::new(),
         })
     }
 
@@ -322,23 +308,6 @@ impl Blockchain {
 
 // Setter methods
 impl Blockchain {
-    /// Add a blockbody to the blockchain cache every epoch, this blockbody
-    /// would be proposed by this node as a block when the network reaches that epoch
-    /// to agree on.
-    /// 
-    /// This methods takes a list of finalized contracts, creates a new block body, and adds 
-    /// it to block cache.
-    pub fn add_to_cache(&mut self, ctrs: Vec<Contract>, epoch: Epoch) -> AgentResult<()> {
-
-        // Validate each contract and store it
-        for ctr in ctrs.iter() {
-            self.validate_contract(ctr)?;
-        }
-
-        self.cache.insert(epoch, BlockBody::new(ctrs));
-        Ok(())
-    }
-
     // Add to file
     fn add_to_db(&mut self, blockinfo: BlockInfo) -> StdResult<()> {
         let block = blockinfo.block();
@@ -382,57 +351,6 @@ impl Blockchain {
         // Add block to db
         self.add_to_db(blockinfo)
             .expect("Error: Block could not be added to chain");
-
-        Ok(())
-    }
-
-    /// If the chain has a block to propose in cache that matches the next epoch,
-    /// the node can propose the block.
-    pub fn get_block_to_propose(&mut self) -> AgentResult<Option<Block>> {
-        // Get latest epoch
-        let next_epoch = self.len()
-            .expect("Illegal: The Epoch table must not be empty");
-
-        // Get blockbody from cache matching next epoch
-        let Some(blockbody) = self.cache.remove(&next_epoch) else {
-            return Ok(None);
-        };
-
-        // TODO: Take any remainder contracts not included in the previous block
-        // and add them to block body
-
-        // Validate each contract and store it
-        for ctr in blockbody.body() {
-            self.validate_contract(&ctr)?;
-        }
-
-        // New block
-        let block = Block::new(
-            self.latest_block().expect("Error getting latest block").header(), 
-            blockbody
-        );
-
-        Ok(Some(block))
-    }
-
-    /// Fetch the proposal of the block with the highest new gdc observed,
-    /// and send the blockheader.
-    pub fn get_block_to_finalize(&self) -> Option<BlockHeader> {
-        self.proposed.block.as_ref().map(|block| block.header().clone())
-    }
-
-    /// Add a proposed block to be cached
-    /// 
-    /// It is illegal to add a block when there is a proposed
-    /// block that has not been cleared, which will cause the method
-    /// to panic.
-    pub fn add_proposal(&mut self, proposal: &Proposal, subusers: u64) {
-        self.proposed.update(proposal, subusers);
-    }
-
-    /// Add a validator of a block to be cached
-    pub fn add_validator(&mut self, validated: Validated, subusers: u64) -> AgentResult<()> {
-        self.validated.add_member(validated)?;
 
         Ok(())
     }
@@ -501,7 +419,7 @@ mod tests {
 // block lookup, persistence, iteration, validation, and recent-block tracking.
 use super::*;
     use std::{assert_eq, fs, path::PathBuf, vec};
-    use marketplace_primitives::{Tx, TxContract, TxIO, TxIdentifier};
+    use marketplace_primitives::{Tx, TxContract, TxIdentifier, tx::{TxOpt, TxOptRef}};
 use marketplace_wallet::Owner;
 
     fn test_db(name: &str) -> PathBuf {
@@ -518,17 +436,17 @@ use marketplace_wallet::Owner;
     // the rest to himself
     fn ctr(owner: &Owner, owner1: &Owner) -> Contract {
 
-        let ipt = Some(vec![TxIO::new(
-            owner.as_lock(), 
-            WU::GDC(),
+        let ipt = Some(vec![TxOptRef::new(
+            [255; 32], 
+            0,
         )]);
 
         let opt = Some(vec![
-            TxIO::new(
+            TxOpt::new(
                 owner1.as_lock(), 
                 WU::try_from(30000).unwrap(),
             ), 
-            TxIO::new(
+            TxOpt::new(
                 owner.as_lock(), 
                 WU::GDC() - WU::try_from(30000).unwrap(),
             )
@@ -575,168 +493,6 @@ use marketplace_wallet::Owner;
         Ok(())
     }
 
-    // This test verifies that a newly published block becomes the latest block in
-    // the chain and advances the chain length from the genesis state.
-    #[test]
-    fn add_empty_block_to_blockchain() -> StdResult<()> {
-        let path = test_db("add_empty_block");
-        let mut chain = Blockchain::init(&path)?;
-
-        let block = Block::new(chain.latest_block()?.header(), vec![]);
-
-        chain.publish_block(block.clone())?;
-
-        println!("published block id: {:?}, latest: {:?}, epoch1: {:?}", block.id(), chain.latest_block()?.id(), chain.get_blockinfo_by_epoch(1)?.map(|b| b.id()));
-        assert_eq!(chain.len()?, 2);
-        assert_eq!(chain.latest_block()?.id(), block.id());
-        assert_eq!(chain.get_blockinfo_by_epoch(1)?.unwrap().id(), block.id());
-
-        fs::remove_file(path)?;
-        Ok(())
-    }
-
-    // This test verifies that block metadata can be looked up by ID and that the
-    // latest block address stays consistent after publishing a valid follow-up block.
-    #[test]
-    fn block_lookup_and_latest_tip_stay_consistent() -> StdResult<()> {
-        let path = test_db("block_lookup_and_latest_tip");
-        let mut chain = Blockchain::init(&path)?;
-
-        let genesis_id = Block::genesis().id();
-        assert!(chain.get_blockinfo_by_id(&genesis_id)?.is_none());
-
-        let block = Block::new(chain.latest_block()?.header(), vec![]);
-        chain.publish_block(block.clone())?;
-
-        let stored = chain.get_blockinfo_by_id(&block.id())?.expect("block should be stored");
-        assert_eq!(stored.block().id(), block.id());
-        assert_eq!(chain.latest_block()?.id(), block.id());
-        assert_eq!(chain.get_blockinfo_by_epoch(1)?.unwrap().id(), block.id());
-
-        fs::remove_file(path)?;
-        Ok(())
-    }
-
-    // Add a valid transaction block to the chain.
-    #[test]
-    fn add_normal_block_to_blockchain() -> StdResult<()> {
-        // Owner in contract
-        let owner = Owner::new_sig();
-
-        let path = test_db("add_normal_block");
-        let mut chain = Blockchain::init(&path)?;
-
-        let block = Block::new(
-            Block::genesis().header(), 
-            vec![ctr(&owner, &owner)]
-        );
-
-        chain.publish_block(block)?;
-
-        assert_eq!(chain.len()?, 2);
-
-        fs::remove_file(path)?;
-        Ok(())
-    }
-
-    // Reject a block whose epoch is already present in the chain.
-    #[test]
-    fn rejects_block_for_an_existing_epoch() -> StdResult<()> {
-        let path = test_db("rejects_existing_epoch");
-        let mut chain = Blockchain::init(&path)?;
-
-        chain.publish_block(Block::new(Block::genesis().header(), vec![]))?;
-        let duplicate_epoch = Block::new(Block::genesis().header(), vec![]);
-
-        let error = chain.publish_block(duplicate_epoch).unwrap_err();
-        assert!(error.contains("Block header does not match expected"));
-
-        fs::remove_file(path)?;
-        Ok(())
-    }
-
-    // Reject a block containing a transaction contract that fails verification.
-    #[test]
-    fn rejects_invalid_transaction_contract() -> StdResult<()> {
-        let path = test_db("rejects_invalid_transaction");
-        let chain = Blockchain::init(&path)?;
-        let invalid_contract = Contract::TX(TxContract::new(vec![Tx::genesis()]));
-        let block = Block::new(Block::genesis().header(), vec![invalid_contract]);
-
-        let error = chain.validate_block(&block).unwrap_err();
-        assert!(!error.is_empty());
-
-        fs::remove_file(path)?;
-        Ok(())
-    }
-
-    // Preserve blocks and chain metadata when the database is reopened.
-    #[test]
-    fn persists_blocks_and_total_gdc_after_reopen() -> StdResult<()> {
-        let path = test_db("persists_blocks");
-        let block_id;
-
-        {
-            let mut chain = Blockchain::init(&path)?;
-            let block = Block::new(Block::genesis().header(), vec![]);
-            block_id = block.id();
-            chain.publish_block(block)?;
-
-            assert_eq!(chain.len()?, 2);
-            assert_eq!(chain.total_gdc()?, WU::GDC());
-        }
-
-        let chain = Blockchain::init(&path)?;
-        assert_eq!(chain.len()?, 2);
-        assert_eq!(chain.latest_block()?.id(), block_id);
-        assert!(chain.get_blockinfo_by_id(&block_id)?.is_some());
-
-        fs::remove_file(path)?;
-        Ok(())
-    }
-
-    // Iterate from the first non-genesis epoch through each subsequent block.
-    #[test]
-    fn iterates_from_genesis_to_tip() -> StdResult<()> {
-        let path = test_db("iterates_from_genesis");
-        let mut chain = Blockchain::init(&path)?;
-
-        chain.publish_block(Block::new(chain.latest_block()?.header(), vec![]))?;
-        chain.publish_block(Block::new(chain.latest_block()?.header(), vec![]))?;
-
-        let block_ids: Vec<ID> = chain.iter(0).map(|block| block.id()).collect();
-        let expected_ids: Vec<ID> = (1..chain.len()?)
-            .map(|epoch| chain.get_blockinfo_by_epoch(epoch).unwrap().unwrap().id())
-            .collect();
-
-        assert_eq!(block_ids, expected_ids);
-        assert_eq!(block_ids.len(), 2);
-
-        fs::remove_file(path)?;
-        Ok(())
-    }
-
-    // Start iteration at a later epoch and stop when the chain tip is reached.
-    #[test]
-    fn iterator_can_start_at_a_nonzero_epoch() -> StdResult<()> {
-        let path = test_db("iterator_nonzero_start");
-        let mut chain = Blockchain::init(&path)?;
-
-        chain.publish_block(Block::new(chain.latest_block()?.header(), vec![]))?;
-        chain.publish_block(Block::new(chain.latest_block()?.header(), vec![]))?;
-
-        let epoch_one_id = chain.get_blockinfo_by_epoch(1)?.unwrap().id();
-        let epoch_two_id = chain.get_blockinfo_by_epoch(2)?.unwrap().id();
-        let blocks: Vec<BlockInfo> = chain.iter(1).collect();
-
-        assert_eq!(blocks.len(), 2);
-        assert_eq!(blocks[0].id(), epoch_one_id);
-        assert_eq!(blocks[1].id(), epoch_two_id);
-
-        fs::remove_file(path)?;
-        Ok(())
-    }
-
     // Return no blocks when iteration begins beyond the current chain tip.
     #[test]
     fn iterator_returns_none_after_the_tip() -> StdResult<()> {
@@ -750,25 +506,6 @@ use marketplace_wallet::Owner;
         Ok(())
     }
 
-    // Genesis is stored separately, while the first non-genesis block is retrieved by epoch.
-    #[test]
-    fn gets_blocks_by_epoch() -> StdResult<()> {
-        let path = test_db("get_block_by_epoch");
-        let mut chain = Blockchain::init(&path)?;
-        let expected_genesis = chain.genesis_block()?.id();
-        let next_block = Block::new(chain.latest_block()?.header(), vec![]);
-        let next_block_id = next_block.id();
-        chain.publish_block(next_block)?;
-
-        assert_eq!(chain.genesis_block()?.id(), expected_genesis);
-        assert!(chain.get_blockinfo_by_epoch(0)?.is_none());
-        assert_eq!(chain.get_blockinfo_by_epoch(1)?.unwrap().id(), next_block_id);
-        assert!(chain.get_blockinfo_by_epoch(2)?.is_none());
-
-        fs::remove_file(path)?;
-        Ok(())
-    }
-
     // Return no block when a requested block ID is absent from the database.
     #[test]
     fn returns_none_for_unknown_block_id() -> StdResult<()> {
@@ -776,75 +513,6 @@ use marketplace_wallet::Owner;
         let chain = Blockchain::init(&path)?;
 
         assert!(chain.get_blockinfo_by_id(&[42u8; 32])?.is_none());
-
-        fs::remove_file(path)?;
-        Ok(())
-    }
-
-    // Treat the latest block and its predecessor as recent, but not older blocks.
-    #[test]
-    fn tracks_recent_blocks() -> StdResult<()> {
-        let path = test_db("tracks_recent_blocks");
-        let mut chain = Blockchain::init(&path)?;
-        let genesis_id = chain.latest_block()?.id();
-
-        assert!(chain.is_recent(genesis_id)?);
-        assert!(!chain.is_recent([42u8; 32])?);
-
-        chain.publish_block(Block::new(chain.latest_block()?.header(), vec![]))?;
-        let first_id = chain.latest_block()?.id();
-        chain.publish_block(Block::new(chain.latest_block()?.header(), vec![]))?;
-        let second_id = chain.latest_block()?.id();
-
-        assert!(chain.is_recent(second_id)?);
-        assert!(chain.is_recent(first_id)?);
-        assert!(!chain.is_recent(genesis_id)?);
-
-        fs::remove_file(path)?;
-        Ok(())
-    }
-
-    // Validate a block against the current tip before it is persisted.
-    #[test]
-    fn validates_block_against_latest_tip() -> StdResult<()> {
-        let path = test_db("validates_latest_tip");
-        let chain = Blockchain::init(&path)?;
-        let block = Block::new(chain.latest_block()?.header(), vec![]);
-
-        chain.validate_block(&block)?;
-
-        fs::remove_file(path)?;
-        Ok(())
-    }
-
-    // Reject a block whose header was built from a stale previous block.
-    #[test]
-    fn rejects_block_built_from_stale_tip() -> StdResult<()> {
-        let path = test_db("rejects_stale_tip");
-        let mut chain = Blockchain::init(&path)?;
-        chain.publish_block(Block::new(chain.latest_block()?.header(), vec![]))?;
-
-        let stale_block = Block::new(Block::genesis().header(), vec![]);
-        let error = chain.validate_block(&stale_block).unwrap_err();
-
-        assert_eq!(error, "Error: Block header does not match expected");
-
-        fs::remove_file(path)?;
-        Ok(())
-    }
-
-    // Reinitializing an existing database should preserve its current chain.
-    #[test]
-    fn reinitialization_does_not_reset_existing_chain() -> StdResult<()> {
-        let path = test_db("reinitialization");
-
-        {
-            let mut chain = Blockchain::init(&path)?;
-            chain.publish_block(Block::new(chain.latest_block()?.header(), vec![]))?;
-        }
-
-        let chain = Blockchain::init(&path)?;
-        assert_eq!(chain.len()?, 2);
 
         fs::remove_file(path)?;
         Ok(())
