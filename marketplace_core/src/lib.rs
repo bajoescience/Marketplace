@@ -35,7 +35,7 @@ mod epoch_state;
 use std::{any::{Any, TypeId}, format, todo};
 
 use marketplace_helpers::objects::{AgentResult, Epoch, ID, IdHash};
-use marketplace_ledger::{Blockchain, Mempool, State};
+use marketplace_ledger::{Balances, Blockchain, Mempool, State};
 use marketplace_p2p::Message;
 use marketplace_primitives::{Contract, JobContract, Proposal, ResultPtr, Validated, Validator, Verify, WorkPtr};
 use marketplace_wallet::{Owner, voting};
@@ -49,7 +49,7 @@ use marketplace_worker::Worker;
 /// The `Core` data structure methods handle incoming messages from the network
 /// by validating the messages, and handing them over to the appropiate 
 /// state data structure (block chain or mempool) to handle.
-pub struct Core<T: State, W: Worker> {
+pub struct Core<B: Balances, W: Worker> {
     // Blockchain representing dead state
     chain: Blockchain,
 
@@ -57,7 +57,7 @@ pub struct Core<T: State, W: Worker> {
     mempool: Mempool,
 
     // Financial State of the network
-    state: T,
+    state: State<B>,
 
     // Worker that executes a VDF, and a Job
     worker: Option<W>,
@@ -70,7 +70,7 @@ pub struct Core<T: State, W: Worker> {
     // epoch_state: Option<Box<dyn EpochState>>
 }
 
-impl<T: State, W: Worker> Core<T, W> {
+impl<B: Balances, W: Worker> Core<B, W> {
     /// Initialize a new `Core` object
     /// which comprises of initializing the 
     /// `Live`, `Dead`, and Financial states.
@@ -81,7 +81,7 @@ impl<T: State, W: Worker> Core<T, W> {
     /// 
     /// The `owner` is used to authenticate a node, and it is used to vote
     /// as proposer or validator of blocks on the network.
-    pub fn new(state: T, worker: Option<W>, chain: Blockchain, owner: Owner) -> Self {
+    pub fn new(state: State<B>, worker: Option<W>, chain: Blockchain, owner: Owner) -> Self {
         // Initialize the blockchain as the dead state
 
         // TODO: Update chain with blocks from network first
@@ -166,7 +166,7 @@ impl<T: State, W: Worker> Core<T, W> {
 
 
 // Handle network messages
-impl<T: State, W: Worker> Core<T, W> {
+impl<B: Balances, W: Worker> Core<B, W> {
     /// ## Work Pointer Handler
     /// 
     /// A `Work Pointer` is sent to the network to initialize a `Job` similar to a Job post.
