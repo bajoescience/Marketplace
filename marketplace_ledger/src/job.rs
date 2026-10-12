@@ -1,7 +1,7 @@
 use std::{collections::{HashMap, HashSet}, format};
 
 use marketplace_helpers::{functions, objects::{AgentResult, ID}};
-use marketplace_primitives::{JobContract, ResultPtr};
+use marketplace_primitives::{Contract, JobContract, ResultPtr, TxContract};
 
 /// # Jobs
 /// 
@@ -9,18 +9,22 @@ use marketplace_primitives::{JobContract, ResultPtr};
 pub struct Jobs {
     // This is where jobs are kept
     // Each job contract is referenced by it's work pointer id
-    ctrs: HashMap<ID, JobContract>,
+    jobs: HashMap<ID, JobContract>,
+
+    // Store transaction contracts
+    txs: Vec<TxContract>,
 
     // finalized jobs to be stored in mempool
     // pending block inclusion
-    ready_ctrs: HashSet<ID>,
+    ready_jobs: HashSet<ID>,
 }
 
 impl Jobs {
     pub fn new() -> Self {
         Self {
-            ctrs: HashMap::new(),
-            ready_ctrs: HashSet::new(),
+            jobs: HashMap::new(),
+            txs: Vec::new(),
+            ready_jobs: HashSet::new(),
         }
     }
 }
@@ -29,28 +33,33 @@ impl Jobs {
 impl Jobs {
     /// Get the `JobContracts` that are ready to be finalized
     /// and added to a new `Block`
-    pub fn get_pending_ctrs(&mut self) -> Vec<JobContract> {
+    pub fn get_pending_ctrs(&mut self) -> Vec<Contract> {
         let mut ctrs = Vec::new();
 
-        // Get contract from Hashmap
-        // using contract id in ready_ctrs list
-        for ctr_id in self.ready_ctrs.iter() {
-            let ctr = self.ctrs.remove(ctr_id)
-                .expect("Illegal: Contract not found in ctrs yet it exists as finalized");
+        // Get jobscontract from Hashmap
+        // using it's id in ready_jobs list
+        for ctr_id in self.ready_jobs.drain() {
+            let jobctr = self.jobs.remove(&ctr_id)
+                .expect("Illegal: Jobcontract not found in jobs yet it exists as finalized");
 
 
-            ctrs.push(ctr.clone())
+            ctrs.push(
+                Contract::JOB(jobctr)
+            )
         }
-        
-        // Clear ready_ctrs
-        self.ready_ctrs.clear();
+
+        for txctr in self.txs.drain(..) {
+            ctrs.push(
+                Contract::TX(txctr)
+            );
+        }
 
         ctrs
     }
 
     /// Take ownership of a `Job` from the `Jobs`
     pub fn take_job(&mut self, ctr_id: ID) -> Option<JobContract> {
-        self.ctrs.remove(&ctr_id)
+        self.jobs.remove(&ctr_id)
     }
 }
 
@@ -64,10 +73,17 @@ impl Jobs {
     /// ready to be finalized.
     /// 
     /// The same is not true for a `Job Contract`.
-    pub fn add_job(&mut self, ctr: JobContract) {
-        let id = ctr.work_id();
+    pub fn add_contract(&mut self, ctr: Contract) {
+        match ctr {
+            Contract::JOB(jobctr) => {
+                let id = jobctr.work_id();
 
-        self.ctrs.insert(id, ctr);
+                self.jobs.insert(id, jobctr);
+            },
+            Contract::TX(txctr) => {
+                self.txs.push(txctr);
+            }
+        }
     }
 
     /// Add a `Result Pointer` to `Job Contract` using it's id, 
@@ -78,7 +94,7 @@ impl Jobs {
         let work_id = resptr.work_id();
 
         // Check if contract exists
-        let Some(jobctr) = self.ctrs.get_mut(&work_id) else {
+        let Some(jobctr) = self.jobs.get_mut(&work_id) else {
             return Err(format!(
                 "Error: Job with work id {} does not exist",
                 functions::from_bytes(&resptr.work_id())
@@ -91,7 +107,7 @@ impl Jobs {
         // If consensus
         // add contract to ready_contracts list
         if jobctr.output().is_consensus() {
-            self.ready_ctrs.insert(jobctr.work_id());
+            self.ready_jobs.insert(jobctr.work_id());
         }
 
         // If no possible consensus
@@ -104,19 +120,6 @@ impl Jobs {
 
         Ok(true)
 
-    }
-
-    /// Return `Contracts` to `Jobs`
-    /// which where not finalized in a block.
-    pub fn return_ctrs(&mut self, ctrs: Vec<JobContract>) {
-        for ctr in ctrs {
-            // Get contract id
-            let id = ctr.work_id();
-
-            // Add Contract to ready contracts
-            self.ready_ctrs.insert(id);
-            self.ctrs.insert(id, ctr); 
-        }       
     }
 }
 

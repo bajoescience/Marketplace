@@ -1,10 +1,12 @@
 mod header;
 mod body;
+mod subblock;
 
 use std::{format};
 use borsh::{BorshDeserialize, BorshSerialize};
 pub use header::BlockHeader;
 pub use body::BlockBody;
+pub use subblock::SubBlock;
 use marketplace_helpers::{ objects::{AgentResult, ID, IdHash}};
 
 use crate::{Contract};
@@ -63,8 +65,8 @@ impl Block {
     }
 
     // Fetch contracts in block
-    pub fn body(&self) -> &[Contract] {
-        self.body.body()
+    pub fn body(&self) -> Vec<&Contract> {
+        self.body.ctrs()
     }
 
     // Serialize
@@ -122,7 +124,7 @@ use super::*;
     #[test]
     fn new_block_exposes_header_and_body() {
         let previous = BlockHeader::genesis();
-        let body = BlockBody::new(Vec::new());
+        let body = BlockBody::new();
         let block = Block::new(&previous, body);
 
         assert_eq!(block.body().len(), 0);
@@ -147,7 +149,7 @@ use super::*;
     #[test]
     fn block_validates_against_previous_header() -> AgentResult<()> {
         let previous = BlockHeader::genesis();
-        let body = BlockBody::new(Vec::new());
+        let body = BlockBody::new();
         let block = Block::new(&previous, body);
 
         block.validate(&previous)
@@ -157,9 +159,9 @@ use super::*;
     #[test]
     fn block_rejects_wrong_previous_header() {
         let previous = BlockHeader::genesis();
-        let body = BlockBody::new(Vec::new());
+        let body = BlockBody::new();
         let block = Block::new(&previous, body);
-        let wrong_previous = BlockHeader::new(&previous, &BlockBody::new(Vec::new()));
+        let wrong_previous = BlockHeader::new(&previous, &BlockBody::new());
 
         let err = block.validate(&wrong_previous).unwrap_err();
         assert_eq!(err, "Error: Block header is the prev header");

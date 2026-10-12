@@ -1,7 +1,7 @@
 //! # Marketplace Core
 //! 
 //! `marketplace core` is the root package of the Marketplace project. This package initializes the `Core` data structure 
-//! which manages the state of a marketplace node comprising of the following States.
+//! which manages the state of a marketplace node comprising of the following.
 //! 
 //! ## Live State
 //! 
@@ -35,9 +35,9 @@ mod epoch_state;
 use std::{any::{Any, TypeId}, format, todo};
 
 use marketplace_helpers::objects::{AgentResult, Epoch, ID, IdHash};
-use marketplace_ledger::{Balances, Blockchain, Mempool, State};
+use marketplace_ledger::{Balances, Blockchain, Jobs, Mempool, State};
 use marketplace_p2p::Message;
-use marketplace_primitives::{Contract, JobContract, Proposal, ResultPtr, Validated, Validator, Verify, WorkPtr};
+use marketplace_primitives::{Contract, JobContract, Proposal, ResultPtr, Validated, Validator, Verify, sync_final::SubBlock};
 use marketplace_wallet::{Owner, voting};
 use marketplace_worker::Worker;
 
@@ -53,7 +53,10 @@ pub struct Core<B: Balances, W: Worker> {
     // Blockchain representing dead state
     chain: Blockchain,
 
-    // Mempool containing live state
+    // Cache of active jobs
+    jobs: Jobs,
+
+    // Mempool containing finalized contracts
     mempool: Mempool,
 
     // Financial State of the network
@@ -88,13 +91,17 @@ impl<B: Balances, W: Worker> Core<B, W> {
         // if the blockchain is not up to date
 
         // Initialize new mempool to act as live state
-        // keeping track of jobs and unfinalized contracts.
+        // keeping track of finalized contracts.
         let mempool = Mempool::new();
+
+        // Handle active jobs 
+        let jobs = Jobs::new();
 
         // A Worker is also included to execute jobs
         // and solve whiteroom challenges.
         Self {
             chain,
+            jobs,
             mempool,
             state,
             worker,
@@ -119,11 +126,11 @@ impl<B: Balances, W: Worker> Core<B, W> {
         let any_payload = &message.payload as &dyn Any;
 
         // Differentiate message by type and handle accordingly.
-        if TypeId::of::<M>() == TypeId::of::<WorkPtr>() {
+        if TypeId::of::<M>() == TypeId::of::<JobContract>() {
             // TODO: Change the unwrap to handle error without panicking!
-            let workptr = any_payload.downcast_ref::<WorkPtr>().unwrap();
+            let workptr = any_payload.downcast_ref::<JobContract>().unwrap();
 
-            self.handle_work_ptr(workptr)
+            self.handle_job(workptr)
         }
 
         // If message payload is a result pointer, 
@@ -186,33 +193,29 @@ impl<B: Balances, W: Worker> Core<B, W> {
     /// 
     ///   If the `Work Pointer` is expired, the `Job Contract` is stored in the mempool, but never executed. 
     ///   The node simply waits on the results of the `Job`. God bless.
-    fn handle_work_ptr(&mut self, workptr: &WorkPtr) -> AgentResult<()> {
+    fn handle_job(&mut self, jobctr: &JobContract) -> AgentResult<()> {
         // Fetch blockheader from blockchain
+        let blk_hdr = jobctr.input().blk_hdr();
+
         // referenced by workptr
-        let Some(blk) = self.chain.get_block_by_id(workptr.blk_hdr()).unwrap() else {
+        let Some(_) = self.chain.get_blockinfo_by_id(blk_hdr).unwrap() else {
             return Err(format!(
                 "Error: Block header does not exist"
             ))
         };
 
         // If workptr is recent, execute it with worker
-        if self.chain.is_recent(*workptr.blk_hdr()).unwrap() {
+        if self.chain.is_recent(*blk_hdr).unwrap() {
             // TODO: Execute work
         }
-        
-        // Initialize new Job contract
-        let jobctr = JobContract::new(
-            workptr.clone(), 
-            blk.header().clone()
-        );
 
-        let ctr = Contract::JOB(jobctr);
+        let ctr = Contract::JOB(jobctr.clone());
 
         // Update asset state using contract
         self.try_sub_ctr(&ctr)?;
 
         // Handover job contract to mempool to handle
-        self.mempool.add_job(ctr);
+        self.jobs.add_contract(ctr);
 
         Ok(())
     }
@@ -227,13 +230,15 @@ impl<B: Balances, W: Worker> Core<B, W> {
     /// 
     /// If result pointer, revert job. 
     fn handle_result_ptr(&mut self, witness: &ResultPtr) -> AgentResult<()> {
-        let can_consensus = self.mempool.add_resptr(witness.clone())?;
+        let can_consensus = self.jobs.add_resptr(witness.clone())?;
 
         // If job cannot reach consensus, withdraw job
         // revert state
         if !can_consensus {
-            let ctr = self.mempool.take_job(witness.work_id())
+            let jobctr = self.jobs.take_job(witness.work_id())
                 .expect("Illegal: Contract should still exist");
+
+            let ctr = Contract::JOB(jobctr);
 
             self.revert_sub_ctr(&ctr);
         }
@@ -286,7 +291,7 @@ impl<B: Balances, W: Worker> Core<B, W> {
 
 
 // Handle Ledger State changes
-impl<T: State, W: Worker> Core<T, W> {
+impl<T: Balances, W: Worker> Core<T, W> {
 
     // Subtracts Contract transaction inputs from the global state
     // If inputs could not be found, a double spend error is assumed.
@@ -338,7 +343,7 @@ impl<T: State, W: Worker> Core<T, W> {
 }
 
 // Handle methods for blocks
-impl<T: State, W: Worker> Core<T, W> {
+impl<T: Balances, W: Worker> Core<T, W> {
     /// This is the action to be taken every epoch by the marketplace node.
     /// 
     /// This method takes a list of finalized `Contracts` from the network
@@ -348,13 +353,15 @@ impl<T: State, W: Worker> Core<T, W> {
     /// to be proposed.
     /// 
     /// This process happens every epoch in a constant loop
-    pub fn handle_epoch(&mut self, epoch: Epoch) -> AgentResult<()> {
+    pub fn handle_epoch(&mut self, epoch: Epoch) {
         // Get finalized contracts
-        let ctrs = self.mempool.get_pending_ctrs();
+        let ctrs = self.jobs.get_pending_ctrs();
 
-        // Add contracts to blockchain as a blockbody to be stored in cache
-        // until time of proposal
-        self.chain.add_to_cache(ctrs, epoch)
+        // Add contracts to new sub block instance
+        let sub_block = SubBlock::new(ctrs);
+
+        // Add subblock to mempool
+        self.mempool.add_sub_block(sub_block);
     }
 
     /// Try to generate a new `Block` form a list of finalized `Contracts`

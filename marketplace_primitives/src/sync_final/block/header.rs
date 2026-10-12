@@ -148,7 +148,7 @@ mod tests {
     #[test]
     fn new_header_references_previous_header_and_body() {
         let previous = BlockHeader::genesis();
-        let body = BlockBody::new(Vec::new());
+        let body = BlockBody::new();
         let header = BlockHeader::new(&previous, &body);
 
         assert_eq!(header.epoch(), previous.epoch() + 1);
@@ -164,7 +164,7 @@ mod tests {
     #[test]
     fn header_construction_is_deterministic() {
         let previous = BlockHeader::genesis();
-        let body = BlockBody::new(Vec::new());
+        let body = BlockBody::new();
 
         let first = BlockHeader::new(&previous, &body);
         let second = BlockHeader::new(&previous, &body);
