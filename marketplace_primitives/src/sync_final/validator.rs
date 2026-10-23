@@ -2,7 +2,7 @@ use borsh::{BorshDeserialize, BorshSerialize};
 use marketplace_helpers::{objects::{AgentResult, ID, IdHash}};
 use marketplace_wallet::{Owner, voting::{self, Role, VotingProof}};
 
-use crate::{BlockHeader, Verify, WRVote};
+use crate::{BlockHeader, Proposal, Proposer, Verify, WRVote};
 
 // This is a validator role
 const ROLE: Role = Role::Validator;
@@ -49,6 +49,9 @@ pub struct Validated {
     // Validator
     voter: Validator,
 
+    // Proposer
+    proposer: Proposer,
+
     // Validated blockheader
     header: BlockHeader,
 
@@ -60,10 +63,12 @@ pub struct Validated {
 
 impl Validated {
     /// Create a new Validated using the block id and validator
-    pub fn new(header: BlockHeader, validator: Validator, subusers: u64) -> Self {
+    pub fn new(validator: Validator, proposal: &Proposal, subusers: u64) -> Self {
+        let Proposal { block, voter } = proposal;
         Self {
-            header,
+            header: block.header().clone(),
             voter: validator,
+            proposer: voter.clone(),
             subusers
         }
     }
@@ -71,6 +76,7 @@ impl Validated {
 
 // Getter methods
 impl Validated {
+    // Get VRF number to use to get subusers
     pub fn get_vrf_opt(&self) -> AgentResult<ID> {
         self.voter.verify(&self.header.id())
     }

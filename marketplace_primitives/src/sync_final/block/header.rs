@@ -1,12 +1,12 @@
 use borsh::{BorshDeserialize, BorshSerialize};
-use marketplace_helpers::{functions, objects::{CONTRACT_WHITEROOM_SIZE, Epoch, ID, IdHash, VRF_T, WU}};
+use marketplace_helpers::{functions, objects::{CONTRACT_WHITEROOM_SIZE, ID, IdHash, VRF_T, WU}};
 
 use crate::{sync_final::block::BlockBody};
 
 #[derive(BorshSerialize, BorshDeserialize, Debug, Clone)]
 pub struct BlockHeader {
-    // Epoch
-    epoch: Epoch,
+    // Block number starting from 0 (genesis block)
+    index: u64,
 
     // Contract merkle root
     ctr_merkle_root: Option<ID>,
@@ -14,8 +14,8 @@ pub struct BlockHeader {
     // Previous block ID
     prev: ID,
 
-    // Total amount of new gdc in block
-    new_gdc: WU,
+    // Total amount of gdc in chain
+    total_gdc: WU,
 
     // New average historical gdc created per block
     average: WU,
@@ -30,12 +30,12 @@ impl BlockHeader {
         let genesis_body = BlockBody::genesis();
 
         Self {
-            epoch: 0,
+            index: 0,
             ctr_merkle_root: genesis_body.root(),
             prev: [0u8; 32],
 
             // Amount of new gdc
-            new_gdc: WU::GDC(),
+            total_gdc: WU::GDC(),
             
             average: WU::single(),
 
@@ -57,10 +57,10 @@ impl BlockHeader {
         );
 
         Self {
-            epoch: prev_header.epoch() + 1,
+            index: prev_header.index() + 1,
             ctr_merkle_root: body.root(),
             prev: prev_header.id(),
-            new_gdc: body.total(),
+            total_gdc: body.total() + prev_header.total_gdc,
             average: new_avg,
 
             // Calculate new VRF threshold 
@@ -76,8 +76,8 @@ impl BlockHeader {
 // Getter methods
 impl BlockHeader {
     // Get epoch
-    pub fn epoch(&self) -> u64 {
-        self.epoch
+    pub fn index(&self) -> u64 {
+        self.index
     }
 
     // Get VDF Difficulty for blockheader
@@ -93,8 +93,8 @@ impl BlockHeader {
     }
 
     // Get amount of new gdc in block
-    pub fn new_gdc(&self) -> WU {
-        self.new_gdc
+    pub fn total_gdc(&self) -> WU {
+        self.total_gdc
     }
 
     // Get average 
@@ -137,9 +137,9 @@ mod tests {
     fn genesis_header_has_initial_values() {
         let header = BlockHeader::genesis();
 
-        assert_eq!(header.epoch(), 0);
+        assert_eq!(header.index(), 0);
         assert_eq!(header.prev(), [0u8; 32]);
-        assert_eq!(header.new_gdc(), WU::GDC());
+        assert_eq!(header.total_gdc(), WU::GDC());
         assert_eq!(header.average(), WU::single());
         assert_eq!(header.vrf_t(), [255u8; 32]);
     }
@@ -148,12 +148,12 @@ mod tests {
     #[test]
     fn new_header_references_previous_header_and_body() {
         let previous = BlockHeader::genesis();
-        let body = BlockBody::new();
+        let body = BlockBody::new(Vec::new());
         let header = BlockHeader::new(&previous, &body);
 
-        assert_eq!(header.epoch(), previous.epoch() + 1);
+        assert_eq!(header.index(), previous.index() + 1);
         assert_eq!(header.prev(), previous.id());
-        assert_eq!(header.new_gdc(), body.total());
+        assert_eq!(header.total_gdc(), body.total());
         assert_eq!(
             header.vrf_t(),
             functions::get_vrf(body.wr_avg(), previous.vrf_t())
@@ -164,7 +164,7 @@ mod tests {
     #[test]
     fn header_construction_is_deterministic() {
         let previous = BlockHeader::genesis();
-        let body = BlockBody::new();
+        let body = BlockBody::new(Vec::new());
 
         let first = BlockHeader::new(&previous, &body);
         let second = BlockHeader::new(&previous, &body);

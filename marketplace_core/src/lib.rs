@@ -37,7 +37,7 @@ use std::{any::{Any, TypeId}, format, todo};
 use marketplace_helpers::objects::{AgentResult, Epoch, ID, IdHash};
 use marketplace_ledger::{Balances, Blockchain, Jobs, Mempool, State};
 use marketplace_p2p::Message;
-use marketplace_primitives::{Contract, JobContract, Proposal, ResultPtr, Validated, Validator, Verify, sync_final::SubBlock};
+use marketplace_primitives::{Block, Contract, JobContract, Proposal, ResultPtr, Validated, Validator, Verify, sync_final::SubBlock};
 use marketplace_wallet::{Owner, voting};
 use marketplace_worker::Worker;
 
@@ -253,8 +253,8 @@ impl<B: Balances, W: Worker> Core<B, W> {
 
         // Subusers must be greater than 0
         if subusers > 0 {
-            // Add block to chain and update subusers
-            self.chain.add_proposal(proposal, subusers);
+            // Add proposal to mempool and update subusers
+            self.mempool.add_proposal(proposal, subusers);
 
             // If subusers count is more than threshold, vote on block
             // as validator
@@ -344,24 +344,16 @@ impl<T: Balances, W: Worker> Core<T, W> {
 
 // Handle methods for blocks
 impl<T: Balances, W: Worker> Core<T, W> {
-    /// This is the action to be taken every epoch by the marketplace node.
-    /// 
-    /// This method takes a list of finalized `Contracts` from the network
-    /// and bundles it into a `Block`.
-    /// 
-    /// The `Block` is then added to the cached blocks in the blockchain
-    /// to be proposed.
-    /// 
-    /// This process happens every epoch in a constant loop
-    pub fn handle_epoch(&mut self, epoch: Epoch) {
-        // Get finalized contracts
-        let ctrs = self.jobs.get_pending_ctrs();
+    // Create a new block
+    fn new_block(&mut self) -> Block {
+        // Get block from mempool
+        let block_body = self.mempool.get_block_body();
 
-        // Add contracts to new sub block instance
-        let sub_block = SubBlock::new(ctrs);
-
-        // Add subblock to mempool
-        self.mempool.add_sub_block(sub_block);
+        // Get latest block in chain which acts as new block's prev block
+        let prev_block = self.chain.latest_block().expect("Unable to get latest block");
+        
+        // Return new block
+        Block::new(prev_block.header(), block_body)
     }
 
     /// Try to generate a new `Block` form a list of finalized `Contracts`
@@ -370,7 +362,7 @@ impl<T: Balances, W: Worker> Core<T, W> {
     /// A `Block` can only be valid to send to the rest of the network
     /// if the current node is chosen as a block proposer
     pub fn propose_block(&mut self) -> AgentResult<()> {
-        // Get block from blockchain cache
+        let block = self.new_block();
 
         // Attempt proposal to 
         // send to the network.
@@ -433,5 +425,33 @@ impl<T: Balances, W: Worker> Core<T, W> {
             user_amount, 
             total_currency
         )
+    }
+}
+
+// Handle async methods that can be spawned as tasks
+impl<T: Balances, W: Worker> Core<T, W> {
+    /// This is the action to be taken every epoch by the marketplace node.
+    /// 
+    /// This method takes a list of finalized `Contracts` from the network
+    /// and bundles it into a `Block`.
+    /// 
+    /// The `Block` is then added to the cached blocks in the blockchain
+    /// to be proposed.
+    /// 
+    /// This process happens every epoch in a constant loop
+    pub fn handle_epoch(&mut self) {
+        // Get finalized contracts
+        let ctrs = self.jobs.get_pending_ctrs();
+
+        // Add contracts to new sub block instance
+        let sub_block = SubBlock::new(ctrs);
+
+        // Add subblock to mempool
+        self.mempool.add_sub_block(sub_block);
+    }
+
+    /// Handle Synchronous finalization
+    pub fn handle_sync_final(&mut self) {
+        // 
     }
 }

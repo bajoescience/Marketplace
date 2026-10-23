@@ -1,17 +1,12 @@
 use marketplace_helpers::{functions, objects::{AgentResult, Epoch, ID, IdHash, StdResult, WU}};
 
 use marketplace_primitives::{
-    Block, Contract, Proposal, Verify, 
-    sync_final::{blockinfo::BlockInfo},
+    Block, Contract, Verify, sync_final::{BlockBody, blockinfo::BlockInfo},
 };
-use marketplace_wallet::voting::EXPECTED_VOTERS;
 
-use std::{format, panic, path::Path};
+use std::{collections::{HashMap}, format, panic, path::Path};
 
 use redb::{Database, Error, ReadableDatabase, ReadableTable, ReadableTableMetadata, TableDefinition};
-
-// MAX whiteroom members for validators
-const WHITEROOM_MAX: usize = functions::max_wr_size_from_expected(EXPECTED_VOTERS);
 
 /// Store all `BlockInfo` directly and address them by their id
 /// 
@@ -27,10 +22,10 @@ const WHITEROOM_MAX: usize = functions::max_wr_size_from_expected(EXPECTED_VOTER
 /// block_id -> BlockInfo
 const BLOCKS: TableDefinition<&[u8], &[u8]> = TableDefinition::new("blocks");
 
-/// Store each block epoch so as to get block id of corresponding epoch
+/// Store each block index so as to get block id of corresponding epoch
 /// 
 /// epoch -> block_id
-const EPOCHS: TableDefinition<Epoch, &[u8]> = TableDefinition::new("epochs");
+const INDEX: TableDefinition<Epoch, &[u8]> = TableDefinition::new("index");
 
 /// Store metadata for the blockcjain for example:
 /// genesis block ("genesis" -> [u8; 32])
@@ -43,6 +38,10 @@ const METADATA: TableDefinition<&str, &[u8]> = TableDefinition::new("metadata");
 pub struct Blockchain {
     // Database
     db: Database,
+
+    // Store key value pair of
+    // contract id and Contract to be stored
+    cache: Option<HashMap<ID, Contract>>,
 }
 
 impl Blockchain {
@@ -60,9 +59,9 @@ impl Blockchain {
             // Store block_id -> Block
             let mut blocks = write_txn.open_table(BLOCKS)?;
 
-            // Open Epoch table
-            //  Store epoch -> Block id
-            let mut epochs = write_txn.open_table(EPOCHS)?;
+            // Open Index table
+            //  Store index -> Block id
+            let mut index = write_txn.open_table(INDEX)?;
 
             // Open metadata table
             let mut metadata = write_txn.open_table(METADATA)?;
@@ -74,13 +73,13 @@ impl Blockchain {
                 // Add genesis metadata and remove
                 // any previous data
                 metadata.insert("genesis", genesis_id.as_slice())?;
-                metadata.insert("gdc", genesis.gdc().as_slice())?;
+                metadata.insert("gdc", genesis.total_gdc().as_slice())?;
 
                 // Clear all previous epochs if they exist
-                while let Some(_) = epochs.pop_first()? {};
+                while let Some(_) = index.pop_first()? {};
 
                 // Add genesis data to epoch
-                epochs.insert(0, genesis_id.as_slice())?;
+                index.insert(0, genesis_id.as_slice())?;
 
                 // Insert genesis block
                 blocks.insert(genesis_id.as_slice(), genesis.serialize().as_slice())?;
@@ -105,6 +104,7 @@ impl Blockchain {
 
         Ok(Self {
             db,
+            cache: Some(HashMap::new()),
         })
     }
 
@@ -133,7 +133,7 @@ impl Blockchain {
 
     // Validate a block
     pub fn validate_block(&self, block: &Block) -> AgentResult<()> {
-        for ctr in block.body() {
+        for ctr in block.ctrs() {
             self.validate_contract(ctr)?;
         }
 
@@ -143,6 +143,50 @@ impl Blockchain {
 
         block.validate(prev_block.header())
     }
+}
+
+// Handle modifying block body
+impl Blockchain {
+    /// Add a sub block to block body to be proposed
+    pub fn add_ctrs(&mut self, ctrs: Vec<Contract>) {
+        // Cache should always have a vector because the cache should
+        // only be in None state when ctrs are being moved, which is then 
+        // immediately replaced. 
+        // If cache is in None state, the cache is corrupted.
+        let cache = self.cache.as_mut()
+            .expect("Illegal: Cache should not be in None state");
+
+        cache.extend(
+            ctrs.into_iter()
+                .map(|ctr| (ctr.id(), ctr))
+        ); 
+    }
+
+    /// Get block body to be proposed in a new block
+    /// from cache
+    pub fn get_block_body(&mut self) -> BlockBody {
+        let ctrs = self.cache
+            .take()
+            .expect("Illegal: Cache should not be in None state");
+
+        self.cache = Some(HashMap::new());
+
+        BlockBody::new(
+            ctrs.into_iter()
+                .map(|(_, ctr)| ctr)
+                .collect()
+        )
+    }
+
+    /// Remove contract from cache if it exists
+    /// and return
+    pub fn take_ctr(&mut self, id: ID) -> Option<Contract> {
+        let cache = self.cache.as_mut()
+            .expect("Illegal: Cache should not be in None state");
+
+        cache.remove(&id)
+    }
+    
 }
 
 // Getter methods
@@ -209,12 +253,12 @@ impl Blockchain {
     }
 
     /// Get block by epoch
-    pub fn get_blockinfo_by_epoch(&self, epoch: u64) -> StdResult<Option<BlockInfo>> {
+    pub fn get_blockinfo_by_index(&self, index: u64) -> StdResult<Option<BlockInfo>> {
         let read_txn = self.db.begin_read()?;
 
         // Get block id from epoch table if it exists
-        let Some(block_id) = read_txn.open_table(EPOCHS)?
-            .get(epoch)?
+        let Some(block_id) = read_txn.open_table(INDEX)?
+            .get(index)?
         else {
             return Ok(None)
         };
@@ -226,7 +270,7 @@ impl Blockchain {
     fn latest_epoch_entry(&self) -> StdResult<(Epoch, ID)>  {
         let epoch = self.db
             .begin_read()?
-            .open_table(EPOCHS)?;
+            .open_table(INDEX)?;
 
         // Epoch table must at least contain genesis block id for epoch 0.
         let (epoch, block_id_bytes) = epoch.last()?
@@ -298,9 +342,9 @@ impl Blockchain {
     /// Iterates through the `Blockchain` by taking as input an epoch, 
     /// and returning the epoch `Block` followed by the next until
     /// when the `Blockchain` reaches the tip, the iterator returns `None`
-    pub fn iter(&self, epoch: u64) -> impl Iterator<Item = BlockInfo> {
+    pub fn iter(&self, index: u64) -> impl Iterator<Item = BlockInfo> {
         BlockChainIterator {
-            epoch,
+            index,
             chain: &self,
         }
     }
@@ -316,16 +360,15 @@ impl Blockchain {
         {
             // Update total gdc in metadata
             let mut metadata = write_txn.open_table(METADATA)?;
-            let mut gdc = self.total_gdc()?;
-            gdc = gdc + block.header().new_gdc();
+            let gdc = block.header().total_gdc();
 
             metadata.insert("gdc", gdc.inner().to_be_bytes().as_slice())?;
 
-            // Chain must have checked if block epoch immediately follows the
+            // Chain must have checked if block index immediately follows the
             // latest block
-            let mut epochs = write_txn.open_table(EPOCHS)?;
+            let mut index = write_txn.open_table(INDEX)?;
             
-            epochs.insert(block.header().epoch(), block.id().as_slice())?;
+            index.insert(block.header().index(), block.id().as_slice())?;
 
             // Update blocks with block info
             let mut blocks = write_txn.open_table(BLOCKS)?;
@@ -356,44 +399,10 @@ impl Blockchain {
     }
 }
 
-// Store block and subuser count
-struct ProposalBlock {
-    block: Option<Block>,
-    subusers: u64
-}
-
-impl ProposalBlock {
-    fn new() -> Self {
-        Self {
-            block: None,
-            subusers: 0,
-        }
-    }
-
-    fn update(&mut self, proposal: &Proposal, subusers: u64) {
-        // Update subuser count
-        self.subusers += subusers;
-
-        let Proposal { block, .. } = proposal;
-
-        match &self.block {
-            Some(current_block) => {
-                // If new block has more new gdc than current block, replace block
-                if block.header().new_gdc() > current_block.header().new_gdc() {
-                    self.block = Some(block.clone());
-                }
-            },
-            None => {
-                self.block = Some(block.clone())
-            }
-        };
-    } 
-}
-
 // Iterator struct for blockchain
 // to iterate through blocks
 struct BlockChainIterator<'a> {
-    epoch: u64,
+    index: u64,
     chain: &'a Blockchain
 }
 
@@ -403,10 +412,10 @@ impl<'a> Iterator for BlockChainIterator<'a> {
     // Returns next block
     fn next(&mut self) -> Option<Self::Item> {
         let block_option = self.chain
-            .get_blockinfo_by_epoch(self.epoch)
+            .get_blockinfo_by_index(self.index)
             .expect("Error iterating through blockchain");
 
-        self.epoch += 1;
+        self.index += 1;
 
         block_option
     }
@@ -500,7 +509,7 @@ use marketplace_wallet::Owner;
         let chain = Blockchain::init(&path)?;
 
         assert!(chain.iter(chain.len()?).next().is_none());
-        assert!(chain.get_blockinfo_by_epoch(1)?.is_none());
+        assert!(chain.get_blockinfo_by_index(1)?.is_none());
 
         fs::remove_file(path)?;
         Ok(())

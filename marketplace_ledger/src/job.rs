@@ -1,7 +1,7 @@
 use std::{collections::{HashMap, HashSet}, format};
 
 use marketplace_helpers::{functions, objects::{AgentResult, ID}};
-use marketplace_primitives::{Contract, JobContract, ResultPtr, TxContract};
+use marketplace_primitives::{Contract, JobContract, ResultPtr};
 
 /// # Jobs
 /// 
@@ -10,9 +10,6 @@ pub struct Jobs {
     // This is where jobs are kept
     // Each job contract is referenced by it's work pointer id
     jobs: HashMap<ID, JobContract>,
-
-    // Store transaction contracts
-    txs: Vec<TxContract>,
 
     // finalized jobs to be stored in mempool
     // pending block inclusion
@@ -23,7 +20,6 @@ impl Jobs {
     pub fn new() -> Self {
         Self {
             jobs: HashMap::new(),
-            txs: Vec::new(),
             ready_jobs: HashSet::new(),
         }
     }
@@ -43,15 +39,7 @@ impl Jobs {
                 .expect("Illegal: Jobcontract not found in jobs yet it exists as finalized");
 
 
-            ctrs.push(
-                Contract::JOB(jobctr)
-            )
-        }
-
-        for txctr in self.txs.drain(..) {
-            ctrs.push(
-                Contract::TX(txctr)
-            );
+            ctrs.push(Contract::JOB(jobctr))
         }
 
         ctrs
@@ -59,7 +47,12 @@ impl Jobs {
 
     /// Take ownership of a `Job` from the `Jobs`
     pub fn take_job(&mut self, ctr_id: ID) -> Option<JobContract> {
-        self.jobs.remove(&ctr_id)
+        let jobctr = self.jobs.remove(&ctr_id)?;
+
+        // Remove the jobctr id if it was in the ready contract set
+        self.ready_jobs.remove(&jobctr.work_id());
+
+        Some(jobctr)
     }
 }
 
@@ -73,17 +66,10 @@ impl Jobs {
     /// ready to be finalized.
     /// 
     /// The same is not true for a `Job Contract`.
-    pub fn add_contract(&mut self, ctr: Contract) {
-        match ctr {
-            Contract::JOB(jobctr) => {
-                let id = jobctr.work_id();
+    pub fn add_contract(&mut self, jobctr: JobContract) {
+        let id = jobctr.work_id();
 
-                self.jobs.insert(id, jobctr);
-            },
-            Contract::TX(txctr) => {
-                self.txs.push(txctr);
-            }
-        }
+        self.jobs.insert(id, jobctr);
     }
 
     /// Add a `Result Pointer` to `Job Contract` using it's id, 

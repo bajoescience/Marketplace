@@ -1,12 +1,10 @@
 mod header;
 mod body;
-mod subblock;
 
 use std::{format};
 use borsh::{BorshDeserialize, BorshSerialize};
 pub use header::BlockHeader;
 pub use body::BlockBody;
-pub use subblock::SubBlock;
 use marketplace_helpers::{ objects::{AgentResult, ID, IdHash}};
 
 use crate::{Contract};
@@ -64,9 +62,24 @@ impl Block {
         &self.header
     }
 
+    // Get block body
+    pub fn body(&self) -> &BlockBody {
+        &self.body
+    }
+
     // Fetch contracts in block
-    pub fn body(&self) -> Vec<&Contract> {
+    pub fn ctrs(&self) -> &[Contract] {
         self.body.ctrs()
+    }
+
+    /// Block iterator for ctrs
+    pub fn iter(&self) -> impl Iterator<Item = &Contract> {
+        self.body.contents()
+    }
+
+    /// Owned Block iterator for ctrs consuming the block
+    pub fn iter_owned(self) -> impl Iterator<Item = Contract> {
+        self.body.owned_contents()
     }
 
     // Serialize
@@ -75,9 +88,19 @@ impl Block {
             .expect("Illegal: Error Serializing")
     }
 
-    // Total created gdc in bytes
-    pub fn gdc(&self) -> [u8; 16] {
-        self.header().new_gdc().inner().to_be_bytes()
+    // Total gdc in chain after block is added
+    pub fn total_gdc(&self) -> [u8; 16] {
+        self.header().total_gdc().inner().to_be_bytes()
+    }
+
+    // Get amount of gdc in block
+    pub fn new_gdc(&self) -> [u8; 16] {
+        self.body.total().inner().to_be_bytes()
+    }
+
+    /// Get block number
+    pub fn index(&self) -> u64 {
+        self.header().index()
     }
 }
 
@@ -117,18 +140,18 @@ use super::*;
     pub fn genesis_gdc() {
         let genesis = Block::genesis();
 
-        assert_eq!(genesis.header().new_gdc(), WU::GDC());
+        assert_eq!(genesis.header().total_gdc(), WU::GDC());
     }
 
     // A newly constructed block should expose its previous-header linkage and body.
     #[test]
     fn new_block_exposes_header_and_body() {
         let previous = BlockHeader::genesis();
-        let body = BlockBody::new();
+        let body = BlockBody::new(Vec::new());
         let block = Block::new(&previous, body);
 
         assert_eq!(block.body().len(), 0);
-        assert_eq!(block.header().epoch(), previous.epoch() + 1);
+        assert_eq!(block.header().index(), previous.index() + 1);
         assert_eq!(block.header().prev(), previous.id());
         assert_eq!(block.id(), block.header().id());
     }
@@ -141,7 +164,7 @@ use super::*;
 
         assert_eq!(restored.id(), block.id());
         assert_eq!(restored.body().len(), block.body().len());
-        assert_eq!(restored.gdc(), block.gdc());
+        assert_eq!(restored.new_gdc(), block.new_gdc());
         Ok(())
     }
 
@@ -149,7 +172,7 @@ use super::*;
     #[test]
     fn block_validates_against_previous_header() -> AgentResult<()> {
         let previous = BlockHeader::genesis();
-        let body = BlockBody::new();
+        let body = BlockBody::new(Vec::new());
         let block = Block::new(&previous, body);
 
         block.validate(&previous)
@@ -159,9 +182,9 @@ use super::*;
     #[test]
     fn block_rejects_wrong_previous_header() {
         let previous = BlockHeader::genesis();
-        let body = BlockBody::new();
+        let body = BlockBody::new(Vec::new());
         let block = Block::new(&previous, body);
-        let wrong_previous = BlockHeader::new(&previous, &BlockBody::new());
+        let wrong_previous = BlockHeader::new(&previous, &BlockBody::new(Vec::new()));
 
         let err = block.validate(&wrong_previous).unwrap_err();
         assert_eq!(err, "Error: Block header is the prev header");

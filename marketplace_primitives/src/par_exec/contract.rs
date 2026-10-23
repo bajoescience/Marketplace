@@ -1,6 +1,8 @@
 pub mod job;
 pub mod tx;
 
+use std::hash::Hash;
+
 use crate::Verify;
 
 pub use self::job::JobContract;
@@ -37,6 +39,15 @@ impl Contract {
             Self::TX(txctr) => txctr.id()
         }
     }
+}
+
+impl PartialEq for Contract {
+    fn eq(&self, other: &Self) -> bool {
+        self.id() == other.id()
+    }
+}
+
+impl Eq for Contract {
 }
 
 impl Verify for Contract {
