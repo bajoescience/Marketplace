@@ -1,7 +1,7 @@
 use std::{collections::{HashMap, HashSet}, format};
 
 use marketplace_helpers::{functions, objects::{AgentResult, ID}};
-use marketplace_primitives::{Contract, JobContract, ResultPtr};
+use marketplace_primitives::{Contract, JobContract, tx::TxOpt};
 
 /// # Jobs
 /// 
@@ -9,7 +9,7 @@ use marketplace_primitives::{Contract, JobContract, ResultPtr};
 pub struct Jobs {
     // This is where jobs are kept
     // Each job contract is referenced by it's work pointer id
-    jobs: HashMap<ID, JobContract>,
+    jobs: HashMap<ID, (JobContract, Vec<TxOpt>)>,
 
     // finalized jobs to be stored in mempool
     // pending block inclusion
@@ -35,7 +35,9 @@ impl Jobs {
         // Get jobscontract from Hashmap
         // using it's id in ready_jobs list
         for ctr_id in self.ready_jobs.drain() {
-            let jobctr = self.jobs.remove(&ctr_id)
+            // Collect job contracts and drop utxos given that
+            // the job has been finalized
+            let (jobctr, _) = self.jobs.remove(&ctr_id)
                 .expect("Illegal: Jobcontract not found in jobs yet it exists as finalized");
 
 
@@ -46,13 +48,38 @@ impl Jobs {
     }
 
     /// Take ownership of a `Job` from the `Jobs`
-    pub fn take_job(&mut self, ctr_id: ID) -> Option<JobContract> {
-        let jobctr = self.jobs.remove(&ctr_id)?;
+    pub fn take_job(&mut self, id: &ID) -> Option<(JobContract, Vec<TxOpt>)> {
+        let (jobctr, utxos) = self.jobs.remove(id)?;
 
         // Remove the jobctr id if it was in the ready contract set
-        self.ready_jobs.remove(&jobctr.work_id());
+        self.ready_jobs.remove(id);
 
-        Some(jobctr)
+        Some((jobctr, utxos))
+    }
+
+    /// Get jobctr ref from jobs
+    pub fn get_job(&self, id: &ID) -> AgentResult<&JobContract> {
+        // Check if contract exists
+        let Some((jobctr, _)) = self.jobs.get(id) else {
+            return Err(format!(
+                "Error: Job with work id {} does not exist",
+                functions::from_bytes(id)
+            ))
+        };
+
+        Ok(jobctr)
+    }
+
+    pub fn get_mut_job(&mut self, id: &ID) -> AgentResult<&mut JobContract> {
+        // Check if contract exists
+        let Some((jobctr, _)) = self.jobs.get_mut(id) else {
+            return Err(format!(
+                "Error: Job with work id {} does not exist",
+                functions::from_bytes(id)
+            ))
+        };
+
+        Ok(jobctr)
     }
 }
 
@@ -66,46 +93,14 @@ impl Jobs {
     /// ready to be finalized.
     /// 
     /// The same is not true for a `Job Contract`.
-    pub fn add_contract(&mut self, jobctr: JobContract) {
+    pub fn add_contract(&mut self, jobctr: JobContract, utxos: Vec<TxOpt>) {
         let id = jobctr.work_id();
 
-        self.jobs.insert(id, jobctr);
+        self.jobs.insert(id, (jobctr, utxos));
     }
 
-    /// Add a `Result Pointer` to `Job Contract` using it's id, 
-    /// and return a boolean indicating if job consensus is possible
-    /// 
-    /// The caller function should handle the bool accordingly.
-    pub fn add_resptr(&mut self, resptr: ResultPtr) -> AgentResult<bool> {
-        let work_id = resptr.work_id();
-
-        // Check if contract exists
-        let Some(jobctr) = self.jobs.get_mut(&work_id) else {
-            return Err(format!(
-                "Error: Job with work id {} does not exist",
-                functions::from_bytes(&resptr.work_id())
-            ))
-        };
-
-        // Add result to the job contract
-        jobctr.add_result(resptr)?;
-
-        // If consensus
-        // add contract to ready_contracts list
-        if jobctr.output().is_consensus() {
-            self.ready_jobs.insert(jobctr.work_id());
-        }
-
-        // If no possible consensus
-        // throwaway contract.
-        if !jobctr.output().can_consensus() {
-            // Caller function handles reverting
-            // of asset state changes caused by the contract
-            return Ok(false)
-        }
-
-        Ok(true)
-
+    pub fn handle_consensus(&mut self, id: ID) {
+        self.ready_jobs.insert(id);
     }
 }
 

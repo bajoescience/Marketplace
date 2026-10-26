@@ -111,7 +111,7 @@ impl<B: Balances> State<B> {
 }
 
 impl<B: Balances> State<B> {
-    // Attempt to remove
+    /// Attempt to remove UTXO from state
     pub fn get_ref_opts<'a>(&mut self, tx: &'a Tx) -> AgentResult<Vec<(&'a TxOptRef, TxOpt)>> {
         let balances = self.get_balances(tx)?;
 
@@ -141,7 +141,7 @@ impl<B: Balances> State<B> {
     }
 
     // Revert outputs gotten from state given any error
-    pub fn revert_get_ref_opts(&mut self, tx: &Tx, ref_opts: Vec<(&TxOptRef, TxOpt)>) {
+    pub fn revert_ref_opts(&mut self, tx: &Tx, ref_opts: Vec<(&TxOptRef, TxOpt)>) {
         // Balances should already exists as we need to add input 
         // before adding outputs
         let balances = self.get_balances(tx)

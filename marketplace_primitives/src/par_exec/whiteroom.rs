@@ -94,7 +94,11 @@ where
         false
     }
 
-    // Check if consensus is still possible
+    /// Check if consensus is still possible
+    /// 
+    /// returns true if possible
+    /// 
+    /// and false if not possible
     pub fn can_consensus(&self) -> bool {
         // Whiteroom can only reach consensus when less than 2
         // results reach effective threshold which is 1 / 3

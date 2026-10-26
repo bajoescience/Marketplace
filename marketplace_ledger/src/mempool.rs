@@ -2,9 +2,9 @@ mod proposed;
 
 pub use self::proposed::ProposedBlock;
 
-use std::cmp::Ordering;
+use std::{cmp::Ordering, todo};
 
-use marketplace_primitives::{Proposal, Validated, Whiteroom};
+use marketplace_primitives::{Proposal, Validated, Whiteroom, sync_final::blockinfo::BlockInfo};
 
 use marketplace_helpers::{functions, objects::{AgentResult}};
 use marketplace_wallet::voting::EXPECTED_VOTERS;
@@ -32,7 +32,7 @@ impl Mempool {
     pub fn add_proposal(&mut self, proposal: &Proposal, subusers: u64) {
         match &self.proposed.proposal {
             Some(winner_proposal) => {
-                // The proposal with block with the greater gdc is chosen as the main proposal
+                // The proposal with block having the greater gdc is chosen as the main proposal
                 match proposal.block.header().total_gdc().partial_cmp(
                     &winner_proposal.block.header().total_gdc()
                 ).unwrap() {
@@ -62,10 +62,22 @@ impl Mempool {
         self.proposed.get_proposal()
     }
 
+    /// Get block info to put in blockchain
+    pub fn get_block_info() -> AgentResult<BlockInfo> {
+        todo!()
+    }
+
     /// Add validator to mempool
     pub fn add_validator(&mut self, validated: Validated) -> AgentResult<()> {
         self.validators.add_member(validated)?;
         Ok(())
+    }
+
+    /// Clear Mempool entries and input round number 
+    /// which is latest block index + 1
+    pub fn clear(&mut self) {
+        self.proposed = ProposedBlock { proposal: None, proposer_count: 0 };
+        self.validators = Whiteroom::new();
     }
 }
 

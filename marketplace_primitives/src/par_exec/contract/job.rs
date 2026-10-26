@@ -66,6 +66,16 @@ impl JobContract {
         &self.output
     }
 
+    /// Check if a job can reach consensus
+    pub fn can_consensus(&self) -> bool {
+        self.output().can_consensus()
+    }
+
+    /// Check if job has reached consensus
+    pub fn is_consensus(&self) -> bool {
+        self.output().is_consensus()
+    }
+
     // Check if block header is correct
     pub fn is_same_blk_hdr(&self, blk_hdr: &BlockHeader) -> bool {
         if *self.input().blk_hdr() == blk_hdr.id() {

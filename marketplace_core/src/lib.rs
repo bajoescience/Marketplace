@@ -37,7 +37,7 @@ use std::{any::{Any, TypeId}, format, todo};
 use marketplace_helpers::objects::{AgentResult, Epoch, ID, IdHash};
 use marketplace_ledger::{Balances, Blockchain, Jobs, Mempool, State};
 use marketplace_p2p::Message;
-use marketplace_primitives::{Block, Contract, JobContract, Proposal, ResultPtr, Validated, Validator, Verify, sync_final::SubBlock};
+use marketplace_primitives::{Block, Contract, JobContract, Proposal, ResultPtr, TxContract, Validated, Validator, Verify, tx::{TxOpt, TxOptRef}};
 use marketplace_wallet::{Owner, voting};
 use marketplace_worker::Worker;
 
@@ -209,13 +209,14 @@ impl<B: Balances, W: Worker> Core<B, W> {
             // TODO: Execute work
         }
 
-        let ctr = Contract::JOB(jobctr.clone());
+        let jobctr = jobctr.clone();
 
-        // Update asset state using contract
-        self.try_sub_ctr(&ctr)?;
+        // Get list of utxos refernced by the job as inputs
+        // if any error occurs, the utxo's should be returned to state
+        let utxos = self.get_jobctr_utxos(&jobctr)?;
 
-        // Handover job contract to mempool to handle
-        self.jobs.add_contract(ctr);
+        // Store job contract in jobs to be handled
+        self.jobs.add_contract(jobctr, utxos);
 
         Ok(())
     }
@@ -229,18 +230,36 @@ impl<B: Balances, W: Worker> Core<B, W> {
     /// that returns an `Error` if any problem occurs. (See Mempool) 
     /// 
     /// If result pointer, revert job. 
-    fn handle_result_ptr(&mut self, witness: &ResultPtr) -> AgentResult<()> {
-        let can_consensus = self.jobs.add_resptr(witness.clone())?;
+    fn handle_result_ptr(&mut self, result: &ResultPtr) -> AgentResult<()> {
+        // Get job from Jobs
+        let job_id = result.work_id();
+        let can_consensus;
+        let is_consensus;
+
+        // Update job
+        // this is put in a new scope due to borrowing rules!
+        {
+            let job = self.jobs.get_mut_job(&job_id)?;
+
+            // Add result pointer to job
+            job.add_result(result.clone());
+
+            can_consensus = job.can_consensus();
+            is_consensus = job.is_consensus();
+        }
+
+        // If job contract has reached consensus, handle consensus
+        if is_consensus {
+            self.jobs.handle_consensus(job_id);
+        }
 
         // If job cannot reach consensus, withdraw job
-        // revert state
+        // revert utxo state
         if !can_consensus {
-            let jobctr = self.jobs.take_job(witness.work_id())
+            let (jobctr, utxos) = self.jobs.take_job(&job_id)
                 .expect("Illegal: Contract should still exist");
 
-            let ctr = Contract::JOB(jobctr);
-
-            self.revert_sub_ctr(&ctr);
+            self.revert_jobctr_utxos(jobctr, utxos);
         }
 
         Ok(())
@@ -293,52 +312,67 @@ impl<B: Balances, W: Worker> Core<B, W> {
 // Handle Ledger State changes
 impl<T: Balances, W: Worker> Core<T, W> {
 
-    // Subtracts Contract transaction inputs from the global state
-    // If inputs could not be found, a double spend error is assumed.
-    pub fn try_sub_ctr(&mut self, ctr: &Contract) -> AgentResult<()> {
-        match ctr {
-            Contract::JOB(jobctr) => {
-                self.state.try_sub_ipt(&jobctr.get_tx())
-            },
-            Contract::TX(txctr) => {
-                // Store tx already used to update state
-                // so that if any error occurs later, all state
-                // changes can be safely reversed
-                let mut txs = Vec::new();
+    // Try to take input UTXO's for jobcontracts
+    pub fn get_jobctr_utxos(&mut self, jobctr: &JobContract) -> AgentResult<Vec<TxOpt>> {
+        let utxos: Vec<TxOpt> = self.state
+            .get_ref_opts(&jobctr.get_tx()?)?
+            .into_iter()
+            .map(|(_, utxo)| utxo)
+            .collect();
 
-                for tx in txctr.get_tx().iter() {
-                    if let Err(e) = self.state.try_sub_ipt(tx) {
-                        // Handle error by reverting previous state changes
-                        for tx in txs.into_iter().rev() {
-                            self.state.revert_sub_ipt(tx);
-                        }
-
-                        return Err(e)
-                    }
-
-                    txs.push(tx);
-                }
-
-                Ok(())
-            },
-        }
+        Ok(utxos)
     }
 
-    // Revert an updated contract state
-    // which is done in the reverse way state was updated
-    // representing a rollback.
-    pub fn revert_sub_ctr(&mut self, ctr: &Contract) {
-        match ctr {
-            Contract::JOB(jobctr) => {
-                self.state.revert_sub_ipt(&jobctr.get_tx());
-            },
-            Contract::TX(txctr) => {
-                // Rollback in reverse
-                for tx in txctr.get_tx().iter().rev() {
-                    self.state.revert_sub_ipt(tx);
+    // Return utxo taken by a job back to state
+    pub fn revert_jobctr_utxos(
+        &mut self, 
+        jobctr: JobContract, 
+        utxos: Vec<TxOpt>
+    ) -> AgentResult<()> {
+        let tx =  jobctr.get_tx()?;
+
+        // Build iterators to put into state
+        let tx_ipts_iter = tx.ipts().iter();
+        let utxo_iter = utxos.into_iter();
+
+        // merge both iterators into tuple to update state
+        let ref_opts = tx_ipts_iter.zip(utxo_iter);
+
+        self.state.revert_ref_opts(&tx, ref_opts.collect());
+        Ok(())
+    }
+
+    // Subtracts Contract transaction inputs from the global state
+    // If inputs could not be found, a double spend error is assumed.
+    pub fn get_txctr_utxos(&mut self, txctr: &TxContract) -> AgentResult<()> {
+        // Get the referenced utxos for each transaction.
+        // If any issues occur, rollback the removed
+
+        // Store each tx and corresponding utxos, so that if any 
+        // rollback occurs, it can be referenced
+        let mut tx_ref_opts = Vec::new();
+
+        for tx in txctr.get_tx().iter() {
+            // Try to get ref opts for txs
+            match self.state.get_ref_opts(tx) {
+                Ok(ref_opts) => {
+                    tx_ref_opts.push((tx, ref_opts));
+                },
+                Err(e) => {
+                    // Revert state changes
+                    for (tx, ref_opts) in tx_ref_opts.into_iter() {
+                        self.state.revert_ref_opts(tx, ref_opts);
+                    }
+                    return Err(e)
                 }
-            },
+                
+            };
+
         }
+
+        Ok(())
+
+        
     }
 }
 

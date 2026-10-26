@@ -1,27 +1,29 @@
 use borsh::{BorshDeserialize, BorshSerialize};
+use marketplace_helpers::functions;
 
-use crate::{Block, Proposer, Validator};
+use crate::{Block, Validated, Whiteroom};
+
+use marketplace_wallet::voting::EXPECTED_VOTERS;
+
+// MAX whiteroom members for validators
+const WHITEROOM_MAX: usize = functions::max_wr_size_from_expected(EXPECTED_VOTERS);
 
 /// Full information concerning a `Block` which includes 
 /// the following:
 /// 
 /// - Block
 /// 
-/// - Proposer
-/// 
 /// - List of Validators
 #[derive(Debug, Clone, BorshSerialize, BorshDeserialize)]
 pub struct BlockInfo {
     block: Block,
-    proposer: Proposer,
-    validators: Vec<Validator>
+    validators: Whiteroom<Validated, WHITEROOM_MAX>
 }
 
 impl BlockInfo {
-    pub fn new(block: Block, proposer: Proposer, validators: Vec<Validator>) -> Self {
+    pub fn new(block: Block, validators: Whiteroom<Validated, WHITEROOM_MAX>) -> Self {
         Self {
             block,
-            proposer,
             validators
         }
     }
@@ -43,5 +45,10 @@ impl BlockInfo {
     // Get block
     pub fn block(&self) -> &Block {
         &self.block
+    }
+
+    // Get Validators
+    pub fn validated(&self) -> &Whiteroom<Validated, WHITEROOM_MAX> {
+        &self.validators
     }
 }
