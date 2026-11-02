@@ -1,10 +1,10 @@
-use std::collections::{HashMap, hash_map::Entry};
+use std::{collections::{HashMap, hash_map::Entry}, format, todo};
 
 use borsh::{BorshDeserialize, BorshSerialize};
 use marketplace_helpers::{functions, objects::{AgentResult, CONTRACT_WHITEROOM_SIZE, ID, IdHash, WU, WorkSize}};
 use marketplace_wallet::{Key, Lock, crypto::Crypto};
 
-use crate::{BlockHeader, ResultPtr, Tx, Verify, Whiteroom, WorkPtr};
+use crate::{par_exec::{ResultPtr, Tx, Whiteroom, WorkPtr}, sync_final::BlockHeader, Verify};
 
 
 /// Maximum whiteroom Size
@@ -24,11 +24,11 @@ pub struct JobContract {
     // Authenticate JobContract
     // by locking workptr and
     // Stores <Lock.id(), Key>
-    #[borsh(skip)]
     auth: HashMap<ID, Key>
 }
 
 impl JobContract {
+    // New jobcontract
     pub fn new(input: WorkPtr, blk_hdr: BlockHeader) -> Self {
         Self {
             blk_hdr,
@@ -37,12 +37,22 @@ impl JobContract {
             auth: HashMap::new(),
         }
     }
+
+    /// New jobcontract with auth
+    pub fn new_with_auth(input: WorkPtr, blk_hdr: BlockHeader, auth: HashMap<ID, Key>) -> Self {
+        Self {
+            blk_hdr,
+            input,
+            output: Whiteroom::new(),
+            auth,
+        }
+    }
 }
 
 // Getter methods
 impl JobContract {
-    // Work id
-    pub fn work_id(&self) -> ID {
+    // id
+    pub fn id(&self) -> ID {
         self.input.id()
     }
 
@@ -111,6 +121,8 @@ impl JobContract {
                 format!("Err: Whiteroom has no winning node")
             )
     }
+
+    // Get 
 }
 
 // Setter methods
@@ -118,6 +130,19 @@ impl JobContract {
     /// Validate all results in whiteroom at once
     pub fn validate_all(&self) -> AgentResult<()> {
         for result in self.output.members() {
+            // Prove ownership of result using key
+            // in auth map
+            let witness = result.witness();
+
+            let Some(key) = self.auth.get(&witness.id()) else {
+                return Err(format!(
+                    "Error: Result Pointer could not be unlocked" 
+                ))
+            };
+
+            witness.unlock(key, &result.id())?;
+
+            // Validate result
             self.validate_result(result)?;
         }
 
@@ -168,6 +193,8 @@ impl JobContract {
 
         // Get difficulty using VRF_T and total work size
         // according to the Whitepaper (Page 4)
+        
+        // TODO: This is to be chnaged depending on the job size
         let diff = self.get_blk_hdr().vdf_diff();
 
         let vrf_result = Crypto::wr_prove(result.wr_proof(), &seed, diff)?;
@@ -183,7 +210,10 @@ impl JobContract {
     }
 
     // Add result to JobContract
-    pub fn add_result(&mut self, result: ResultPtr) -> AgentResult<usize> {
+    pub fn add_result(
+        &mut self, 
+        result: ResultPtr,
+    ) -> AgentResult<usize> {
         // Validate result with reference to JobContract
         self.validate_result(&result)?;
 
@@ -192,23 +222,15 @@ impl JobContract {
     }
 
     // force parameter will overide any previous associated keys
-    pub fn add_auth(&mut self, lock: Lock, key: Key, force: bool) -> AgentResult<()> {
+    pub fn add_auth(&mut self, lock: Lock, key: Key) {
         match self.auth.entry(lock.id()) {
             Entry::Vacant(entry) => {
                 entry.insert(key);
             },
-            Entry::Occupied(mut entry) if force => {
-                entry.insert(key);
-            },
             Entry::Occupied(_) => {
-                return Err(format!(
-                    "Key already exists for Lock ID {}",
-                    functions::from_bytes(&lock.id())
-                ));
+                
             },  
         }
-
-        Ok(())
     }
 }
 
@@ -237,7 +259,10 @@ pub mod tests {
 use marketplace_helpers::{functions::{dum_bytes, wr_seed}, objects::{IdHash, WU, WorkSize}};
 use marketplace_wallet::{Owner, crypto::Crypto};
 
-use crate::{BlockHeader, par_exec::{ExecuteTime, ResultInfo}, sync_final::block::BlockBody, tx::TxOptRef};
+use crate::{
+    par_exec::{ExecuteTime, ResultInfo, TxOptRef},
+    sync_final::{BlockBody, BlockHeader},
+};
 
 use super::*;
 
@@ -285,16 +310,13 @@ use super::*;
 
         let result = ResultInfo::new(dum_bytes(), work_pay().1);
         
-        let mut resptr = ResultPtr::new(work_id, result, wr_proof, dum_bytes(), 
+        ResultPtr::new(
+            work_id, 
+            result, 
+            wr_proof, 
+            dum_bytes(), 
             wr_owner.as_wr_lock()
-        );
-
-        // Prove ownership
-        let key = wr_owner.sign(&resptr.id());
-
-        resptr.add_auth(wr_owner.as_wr_lock(), key, false).unwrap();
-
-        resptr
+        )
     }
 
     // Add a result to contract
@@ -312,11 +334,7 @@ use super::*;
 
         // Sign workptr and add to ctr
         let key = ipt_owner.sign(&ctr.input().id());
-        ctr.add_auth(
-            ipt_owner.as_wr_lock(), 
-            key, 
-            false
-        ).unwrap();
+        ctr.add_auth(ipt_owner.as_wr_lock(), key);
 
         // Result
         let result_ptr = resultptr(
@@ -324,6 +342,10 @@ use super::*;
             &wr_owner,
             blk_hdr.vdf_diff()
         );
+
+        // Sign result and add to job contract
+        let key = wr_owner.sign(&result_ptr.id());
+        ctr.add_auth(wr_owner.as_wr_lock(), key);
 
         let len = ctr.add_result(result_ptr)?;
         assert_eq!(len, 1);
@@ -365,13 +387,17 @@ use super::*;
                     header.vdf_diff()
                 );
 
-                result_ptr
+                let key = wr_owner.sign(&result_ptr.id());
+
+                (result_ptr, wr_owner.as_wr_lock(), key)
             })); 
         }
 
         for handle in handles {
-            let result_ptr = handle.join().unwrap();
+            let (result_ptr, lock, key) = handle.join().unwrap();
+            
             ctr.add_result(result_ptr)?;
+            ctr.add_auth(lock, key);
         }
 
         // Total amount should be whiteroom max size
@@ -396,7 +422,7 @@ use super::*;
         let work_ptr = workptr(&owner, block_header.id());
         let contract = JobContract::new(work_ptr.clone(), block_header.clone());
 
-        assert_eq!(contract.work_id(), work_ptr.id());
+        assert_eq!(contract.id(), work_ptr.id());
         assert_eq!(contract.wr_len(), 0);
         assert_eq!(contract.input().id(), work_ptr.id());
         assert_eq!(contract.get_blk_hdr().id(), block_header.id());
@@ -429,11 +455,16 @@ use super::*;
             workptr(&input_owner, block_header.id()),
             block_header.clone(),
         );
+
         let result = resultptr(
-            contract.work_id(),
+            contract.id(),
             &result_owner,
             block_header.vdf_diff(),
         );
+
+        let key = result_owner.sign(&result.id());
+        contract.add_auth(result_owner.as_wr_lock(), key);
+
         let result_id = result.id();
 
         assert_eq!(contract.add_result(result)?, 1);
@@ -458,6 +489,9 @@ use super::*;
             &result_owner,
             block_header.vdf_diff(),
         );
+
+        let key = result_owner.sign(&result.id());
+        contract.add_auth(result_owner.as_wr_lock(), key);
 
         let err = contract.add_result(result).unwrap_err();
         assert_eq!(err, "Error: Invalid WorkPtr Reference");

@@ -15,17 +15,17 @@ use super::{BorshDeserialize, BorshSerialize, ID};
 /// ```
 /// use marketplace_wallet::{Owner};
 /// use marketplace_helpers::objects::WU;
-/// use marketplace_primitives::tx::TxOpt;
+/// use marketplace_primitives::par_exec::TxOpt;
 /// 
 /// let user = Owner::new_sig();
 /// let lock = user.as_lock(); 
 /// 
-/// let output = TxIO::new(lock, WU::GDC());
+/// let output = TxOpt::new(lock, WU::GDC());
 /// 
 /// // Output is equal to one gdc
 /// assert_eq!(output.amount(), WU::GDC());
 /// ```
-#[derive(BorshSerialize, BorshDeserialize, Debug, Clone, PartialEq)]
+#[derive(BorshSerialize, BorshDeserialize, Debug, Clone, Copy, PartialEq)]
 pub struct TxOpt {
     // Owner
     lock: Lock,
@@ -52,8 +52,8 @@ impl TxOpt {
 
 // Getter methods
 impl TxOpt {
-    pub fn lock(&self) -> &Lock {
-        &self.lock
+    pub fn lock(&self) -> Lock {
+        self.lock
     }
 
     // Input amount
@@ -73,7 +73,7 @@ impl TxOpt {
 /// ```
 /// use marketplace_wallet::{Owner};
 /// use marketplace_helpers::objects::WU;
-/// use marketplace_primitives::tx::TxOptRef;
+/// use marketplace_primitives::par_exec::TxOptRef;
 /// 
 /// let user = Owner::new_sig();
 /// 
@@ -86,7 +86,7 @@ impl TxOpt {
 /// // Input is equal to one gdc
 /// assert_eq!(input.amount(), WU::GDC());
 /// ```
-#[derive(BorshSerialize, BorshDeserialize, Debug, Clone, PartialEq)]
+#[derive(BorshSerialize, BorshDeserialize, Debug, Clone, Copy, PartialEq)]
 pub struct TxOptRef {
     // Transaction id
     // where referenced output is

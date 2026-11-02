@@ -1,7 +1,7 @@
 use std::{collections::{HashMap, HashSet}, format};
 
 use marketplace_helpers::{functions, objects::{AgentResult, ID}};
-use marketplace_primitives::{Contract, JobContract, tx::TxOpt};
+use marketplace_primitives::par_exec::{Contract, JobContract, TxOpt, TxOptRef};
 
 /// # Jobs
 /// 
@@ -9,7 +9,7 @@ use marketplace_primitives::{Contract, JobContract, tx::TxOpt};
 pub struct Jobs {
     // This is where jobs are kept
     // Each job contract is referenced by it's work pointer id
-    jobs: HashMap<ID, (JobContract, Vec<TxOpt>)>,
+    jobs: HashMap<ID, (JobContract, Vec<(TxOptRef, TxOpt)>)>,
 
     // finalized jobs to be stored in mempool
     // pending block inclusion
@@ -29,7 +29,7 @@ impl Jobs {
 impl Jobs {
     /// Get the `JobContracts` that are ready to be finalized
     /// and added to a new `Block`
-    pub fn get_pending_ctrs(&mut self) -> Vec<Contract> {
+    pub fn get_pending_jobs(&mut self) -> Vec<Contract> {
         let mut ctrs = Vec::new();
 
         // Get jobscontract from Hashmap
@@ -48,7 +48,7 @@ impl Jobs {
     }
 
     /// Take ownership of a `Job` from the `Jobs`
-    pub fn take_job(&mut self, id: &ID) -> Option<(JobContract, Vec<TxOpt>)> {
+    pub fn take_job(&mut self, id: &ID) -> Option<(JobContract, Vec<(TxOptRef, TxOpt)>)> {
         let (jobctr, utxos) = self.jobs.remove(id)?;
 
         // Remove the jobctr id if it was in the ready contract set
@@ -93,8 +93,8 @@ impl Jobs {
     /// ready to be finalized.
     /// 
     /// The same is not true for a `Job Contract`.
-    pub fn add_contract(&mut self, jobctr: JobContract, utxos: Vec<TxOpt>) {
-        let id = jobctr.work_id();
+    pub fn add_contract(&mut self, jobctr: JobContract, utxos: Vec<(TxOptRef, TxOpt)>) {
+        let id = jobctr.id();
 
         self.jobs.insert(id, (jobctr, utxos));
     }

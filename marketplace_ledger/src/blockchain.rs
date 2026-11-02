@@ -1,10 +1,12 @@
 use marketplace_helpers::{functions, objects::{AgentResult, Epoch, ID, IdHash, StdResult, WU}};
 
 use marketplace_primitives::{
-    Block, Contract, Verify, sync_final::{BlockBody, blockinfo::BlockInfo},
+    Verify,
+    par_exec::Contract,
+    sync_final::{Block, BlockBody, blockinfo::BlockInfo},
 };
 
-use std::{collections::{HashMap}, format, panic, path::Path};
+use std::{collections::HashMap, format, panic, path::Path, vec};
 
 use redb::{Database, Error, ReadableDatabase, ReadableTable, ReadableTableMetadata, TableDefinition};
 
@@ -162,9 +164,9 @@ impl Blockchain {
         ); 
     }
 
-    /// Get block body to be proposed in a new block
-    /// from cache
-    pub fn get_block_body(&mut self) -> BlockBody {
+    // Get block body to be proposed in a new block
+    // from cache
+    fn get_block_body(&mut self) -> BlockBody {
         let ctrs = self.cache
             .take()
             .expect("Illegal: Cache should not be in None state");
@@ -176,6 +178,17 @@ impl Blockchain {
                 .map(|(_, ctr)| ctr)
                 .collect()
         )
+    }
+
+    /// Return a new block to be proposed to the network
+    pub fn new_block(&mut self) -> Block {
+        let blockbody = self.get_block_body();
+
+        // Get latest block in chain which acts as new block's prev block
+        let prev_block = self.latest_block().expect("Unable to get latest block");
+        
+        // Return new block
+        Block::new(prev_block.header(), blockbody)
     }
 
     /// Remove contract from cache if it exists
@@ -308,6 +321,11 @@ impl Blockchain {
         Ok(block.block().clone())
     }
 
+    /// Get seed for final sync round 
+    pub fn seed(&self) -> ID {
+        self.latest_block().unwrap().header().id()
+    }
+
     /// Total goldcoin in chain
     pub fn total_gdc(&self) -> StdResult<WU> {
         let metadata = self.db
@@ -428,7 +446,7 @@ mod tests {
 // block lookup, persistence, iteration, validation, and recent-block tracking.
 use super::*;
     use std::{assert_eq, fs, path::PathBuf, vec};
-    use marketplace_primitives::{Tx, TxContract, TxIdentifier, tx::{TxOpt, TxOptRef}};
+    use marketplace_primitives::par_exec::{Bill, Tx, TxContract, TxIdentifier, TxOpt, TxOptRef};
 use marketplace_wallet::Owner;
 
     fn test_db(name: &str) -> PathBuf {
@@ -461,23 +479,23 @@ use marketplace_wallet::Owner;
             )
         ]);
 
-        let txs = vec![
+        let bill = Bill::new(vec![
             Tx::new(
                 0, 
                 TxIdentifier::COIN, 
                 ipt.clone(), 
                 opt.clone()
             )
-        ];
+        ]);
 
-        let mut txctr = TxContract::new(txs);
-        let key = owner.sign(&txctr.id());
+        let key = owner.sign(&bill.id());
+
+        let mut txctr = TxContract::new(bill);
 
         txctr.add_auth(
             owner.as_lock(), 
-            key, 
-            false
-        ).unwrap();
+            key,
+        );
 
         Contract::TX(txctr)
         

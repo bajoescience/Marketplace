@@ -3,7 +3,7 @@ use borsh::{BorshDeserialize, BorshSerialize};
 use marketplace_helpers::objects::{CONTRACT_WHITEROOM_SIZE, ID, WU};
 use rs_merkle::{MerkleTree, algorithms::Sha256};
 
-use crate::Contract;
+use crate::par_exec::Contract;
 
 #[derive(Debug, Clone, BorshSerialize, BorshDeserialize)]
 pub struct BlockBody {
@@ -117,7 +117,10 @@ mod tests {
     use marketplace_helpers::objects::{AgentResult, CONTRACT_WHITEROOM_SIZE, IdHash};
 use marketplace_wallet::Owner;
 
-use crate::{BlockHeader, JobContract};
+use crate::{
+    par_exec::{Bill, JobContract, TxContract},
+    sync_final::BlockHeader,
+};
     use crate::par_exec::contract::job::tests::{resultptr, workptr};
     use super::*;
 
@@ -151,13 +154,17 @@ use crate::{BlockHeader, JobContract};
                     header.vdf_diff()
                 );
 
-                result_ptr
+                let key = wr_owner.sign(&result_ptr.id());
+
+                (result_ptr, wr_owner.as_wr_lock(), key)
             })); 
         }
 
         for handle in handles {
-            let result_ptr = handle.join().unwrap();
+            let (result_ptr, lock, key) = handle.join().unwrap();
+
             jobctr.add_result(result_ptr)?;
+            jobctr.add_auth(lock, key);
         }
 
         Ok(jobctr)
@@ -218,7 +225,7 @@ use crate::{BlockHeader, JobContract};
     // The body root should change when its contract list changes.
     #[test]
     fn body_root_depends_on_contracts() -> AgentResult<()> {
-        let first = BlockBody::new(vec![Contract::TX(crate::TxContract::new(Vec::new()))]);
+        let first = BlockBody::new(vec![Contract::TX(TxContract::new(Bill::new(Vec::new())))]);
         let second = BlockBody::new(vec![Contract::genesis()]);
 
         assert_ne!(first.root(), second.root());

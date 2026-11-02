@@ -318,7 +318,7 @@ impl Lock {
 /// `Key` is used to unlock a `Lock` type and prove ownership of a locked primitive.
 /// 
 /// **see `Lock`**
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, BorshSerialize, BorshDeserialize)]
 pub enum Key {
     // (Signature, pubkey)
     SIG([u8; SIGNATURE_LENGTH], ID),

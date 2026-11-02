@@ -1594,6 +1594,7 @@ dependencies = [
  "borsh",
  "hex",
  "marketplace_helpers",
+ "marketplace_wallet",
 ]
 
 [[package]]

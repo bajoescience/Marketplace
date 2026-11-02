@@ -2,9 +2,12 @@ mod proposed;
 
 pub use self::proposed::ProposedBlock;
 
-use std::{cmp::Ordering, todo};
+use std::{todo};
 
-use marketplace_primitives::{Proposal, Validated, Whiteroom, sync_final::blockinfo::BlockInfo};
+use marketplace_primitives::{
+    par_exec::Whiteroom,
+    sync_final::{Proposal, Validated, blockinfo::BlockInfo},
+};
 
 use marketplace_helpers::{functions, objects::{AgentResult}};
 use marketplace_wallet::voting::EXPECTED_VOTERS;
@@ -29,32 +32,9 @@ impl Mempool {
     }
 
     /// Add a proposal to the MempoolState and update total subusers count
-    pub fn add_proposal(&mut self, proposal: &Proposal, subusers: u64) {
-        match &self.proposed.proposal {
-            Some(winner_proposal) => {
-                // The proposal with block having the greater gdc is chosen as the main proposal
-                match proposal.block.header().total_gdc().partial_cmp(
-                    &winner_proposal.block.header().total_gdc()
-                ).unwrap() {
-                    Ordering::Greater => {
-                        self.proposed.add_proposal(proposal.clone(), subusers);
-                    },
-                    Ordering::Equal => {
-                        // Comapre block id, the one with lower block id is chosen
-                        if proposal.block.id() < winner_proposal.block.id() {
-                            self.proposed.add_proposal(proposal.clone(), subusers);
-                        }
-                    },
-                    Ordering::Less => {
-                        // Just update subusers
-                        self.proposed.proposer_count += subusers;
-                    },
-                }
-            },
-            None => {
-                self.proposed.add_proposal(proposal.clone(), subusers);
-            }
-        }
+    pub fn add_proposal(&mut self, proposal: Proposal, subusers: u64) {
+        self.proposed.add_proposal(proposal, subusers);
+        
     }
 
     /// Get winning proposal to validate to network
@@ -80,4 +60,3 @@ impl Mempool {
         self.validators = Whiteroom::new();
     }
 }
-

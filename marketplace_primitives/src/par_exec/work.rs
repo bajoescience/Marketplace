@@ -8,7 +8,7 @@
 use borsh::{BorshDeserialize, BorshSerialize};
 use marketplace_helpers::objects::WorkSize;
 use marketplace_wallet::Lock;
-use crate::tx::TxOptRef;
+use crate::par_exec::TxOptRef;
 use crate::helpers::objects::{ID, WorkAddr};
 
 /// When to start executing work
@@ -38,7 +38,11 @@ pub enum ExecuteTime {
 /// **NOTE: The values used in this example are dummy values**
 /// 
 /// ```
-/// use marketplace_primitives::{WorkPtr, ExecuteTime, BlockHeader, Verify};
+/// use marketplace_primitives::{
+///     par_exec::{ExecuteTime, TxOptRef, WorkPtr},
+///     sync_final::BlockHeader,
+///     Verify,
+/// };
 /// use marketplace_helpers::objects::{WU, IdHash, WorkSize};
 /// use marketplace_wallet::Owner;
 /// 
@@ -61,14 +65,11 @@ pub enum ExecuteTime {
 /// let mut workptr = WorkPtr::new(
 ///     work_address,
 ///     WorkSize::build(work_size).unwrap(),
+///     vec![TxOptRef::new([255u8; 32], 0)],
 ///     employer.as_wr_lock(),
 ///     blk_hdr.id(),
 ///     do_at
 /// );
-/// 
-/// // Lock work pointer to prove ownership
-/// let key = employer.sign(&workptr.id());
-/// workptr.add_auth(employer.as_wr_lock(), key, false).unwrap();
 /// 
 /// // Verify it's a valid Work Pointer
 /// assert!(workptr.verify().is_ok());
@@ -104,7 +105,11 @@ impl WorkPtr {
     /// **NOTE: The values used in this example are dummy values**
     /// 
     /// ```
-    /// use marketplace_primitives::{WorkPtr, ExecuteTime, BlockHeader, Verify};
+    ///     use marketplace_primitives::{
+    ///         par_exec::{ExecuteTime, TxOptRef, WorkPtr},
+    ///         sync_final::BlockHeader,
+    ///         Verify,
+    ///     };
     /// use marketplace_helpers::objects::{WU, IdHash, WorkSize};
     /// use marketplace_wallet::Owner;
     /// 
@@ -121,7 +126,7 @@ impl WorkPtr {
     /// let employer = Owner::new_sig();
     /// 
     /// // Ipt transaction output
-    /// let ipts = vec![TxOprRef::new([255u8; 32], 0)];
+    /// let ipts = vec![TxOptRef::new([255u8; 32], 0)];
     /// 
     /// // ID of latest block header
     /// let blk_hdr = BlockHeader::genesis();
@@ -135,10 +140,6 @@ impl WorkPtr {
     ///     blk_hdr.id(),
     ///     do_at
     /// );
-    /// 
-    /// // Lock work pointer to prove ownership
-    /// let key = employer.sign(&workptr.id());
-    /// workptr.add_auth(employer.as_wr_lock(), key, false).unwrap();
     /// 
     /// // Verify it's a valid Work Pointer
     /// assert!(workptr.verify().is_ok());
@@ -173,7 +174,7 @@ impl WorkPtr {
         self.size
     }
 
-    // Employer
+    // Inputs
     pub fn ipts(&self) -> &Vec<TxOptRef> {
         &self.ipts
     }

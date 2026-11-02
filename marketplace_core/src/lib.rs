@@ -32,13 +32,13 @@
 //! `Block` message
 
 mod epoch_state;
-use std::{any::{Any, TypeId}, format, todo};
+use std::{any::{Any, TypeId}, collections::HashMap, format, todo};
 
-use marketplace_helpers::objects::{AgentResult, Epoch, ID, IdHash};
-use marketplace_ledger::{Balances, Blockchain, Jobs, Mempool, State};
+use marketplace_helpers::{functions, objects::{AgentResult, Epoch, ID, IdHash}};
+use marketplace_ledger::{Balances, Blockchain, Jobs, Mempool, State, state};
 use marketplace_p2p::Message;
-use marketplace_primitives::{Block, Contract, JobContract, Proposal, ResultPtr, TxContract, Validated, Validator, Verify, tx::{TxOpt, TxOptRef}};
-use marketplace_wallet::{Owner, voting};
+use marketplace_primitives::{Verify, par_exec::{Bill, Contract, JobContract, ResultPtr, TxContract, TxOpt, TxOptRef, WorkPtr}, sync_final::{Proposal, Proposer, Validated, Validator, voter::Voter}};
+use marketplace_wallet::{Key, Owner, voting};
 use marketplace_worker::Worker;
 
 /// This is the `Core` data structure that manages the state of the Marketplace node.
@@ -116,21 +116,24 @@ impl<B: Balances, W: Worker> Core<B, W> {
     /// 
     /// The objects in the `Messages` passed to this function must be verifiable (`Verify` trait)
     pub async fn handle_message<M>(&mut self, message: &Message<M>) -> AgentResult<()>
-    where M: 'static + Verify
+    where M: 'static + Verify + IdHash
     {
+        // Collect payload and signatures from the message
+        let Message { payload, auth } = message;
+
         // Ensure message payload is authorized/valid
         // through the verify trait
-        message.payload.verify()?;
+        payload.verify()?;
 
         // Check Message type
         let any_payload = &message.payload as &dyn Any;
 
         // Differentiate message by type and handle accordingly.
-        if TypeId::of::<M>() == TypeId::of::<JobContract>() {
+        if TypeId::of::<M>() == TypeId::of::<WorkPtr>() {
             // TODO: Change the unwrap to handle error without panicking!
-            let workptr = any_payload.downcast_ref::<JobContract>().unwrap();
+            let workptr = any_payload.downcast_ref::<WorkPtr>().unwrap();
 
-            self.handle_job(workptr)
+            self.handle_job(workptr, auth)
         }
 
         // If message payload is a result pointer, 
@@ -140,23 +143,30 @@ impl<B: Balances, W: Worker> Core<B, W> {
             let resultptr = any_payload.downcast_ref::<ResultPtr>().unwrap();
 
             // Validate witness with state
-            self.handle_result_ptr(resultptr)
+            self.handle_result_ptr(resultptr, auth)
+        }
+
+        // Handle message containing a Bill payload
+        else if TypeId::of::<M>() == TypeId::of::<Bill>() {
+            let bill = any_payload.downcast_ref::<Bill>().unwrap();
+
+            self.handle_bill(bill, auth)
         }
 
         // Handle message with block payload
-        else if TypeId::of::<M>() == TypeId::of::<Proposal>() {
+        else if TypeId::of::<M>() == TypeId::of::<Proposer>() {
             // TODO: Change the unwrap to handle error without panicking!
-            let proposal = any_payload.downcast_ref::<Proposal>().unwrap();
+            let proposer = any_payload.downcast_ref::<Proposer>().unwrap();
 
-            self.handle_proposal(proposal)
+            self.handle_proposer(proposer, auth)
         }
 
         // Handle Block validator payload
-        else if TypeId::of::<M>() == TypeId::of::<Validated>() {
+        else if TypeId::of::<M>() == TypeId::of::<Validator>() {
             // TODO: Change the unwrap to handle error without panicking!
-            let validated = any_payload.downcast_ref::<Validated>().unwrap();
+            let validator = any_payload.downcast_ref::<Validator>().unwrap();
 
-            self.handle_validator(validated)
+            self.handle_validator(validator, auth)
         }
 
         // TODO: Handle more types of network messages
@@ -193,30 +203,34 @@ impl<B: Balances, W: Worker> Core<B, W> {
     /// 
     ///   If the `Work Pointer` is expired, the `Job Contract` is stored in the mempool, but never executed. 
     ///   The node simply waits on the results of the `Job`. God bless.
-    fn handle_job(&mut self, jobctr: &JobContract) -> AgentResult<()> {
+    fn handle_job(&mut self, workptr: &WorkPtr, auth: &HashMap<ID, Key>) -> AgentResult<()> {
         // Fetch blockheader from blockchain
-        let blk_hdr = jobctr.input().blk_hdr();
+        let blk_hdr = workptr.blk_hdr();
 
         // referenced by workptr
-        let Some(_) = self.chain.get_blockinfo_by_id(blk_hdr).unwrap() else {
+        let Some(block_info) = self.chain.get_blockinfo_by_id(blk_hdr).unwrap() else {
             return Err(format!(
                 "Error: Block header does not exist"
             ))
         };
 
+        // Get list of utxos refernced by the job as inputs
+        // if any error occurs, the utxo's should be returned to state
+        let utxos = self.get_workptr_utxos(workptr, auth)?;
+
+        let jobctr = JobContract::new_with_auth(
+            workptr.clone(),
+            block_info.block().header().clone(),
+            auth.clone()
+        );
+
+        // Store job contract in jobs to be handled
+        self.jobs.add_contract(jobctr, utxos);
+
         // If workptr is recent, execute it with worker
         if self.chain.is_recent(*blk_hdr).unwrap() {
             // TODO: Execute work
         }
-
-        let jobctr = jobctr.clone();
-
-        // Get list of utxos refernced by the job as inputs
-        // if any error occurs, the utxo's should be returned to state
-        let utxos = self.get_jobctr_utxos(&jobctr)?;
-
-        // Store job contract in jobs to be handled
-        self.jobs.add_contract(jobctr, utxos);
 
         Ok(())
     }
@@ -230,8 +244,18 @@ impl<B: Balances, W: Worker> Core<B, W> {
     /// that returns an `Error` if any problem occurs. (See Mempool) 
     /// 
     /// If result pointer, revert job. 
-    fn handle_result_ptr(&mut self, result: &ResultPtr) -> AgentResult<()> {
-        // Get job from Jobs
+    fn handle_result_ptr(&mut self, result: &ResultPtr, auth: &HashMap<ID, Key>) -> AgentResult<()> {
+        // Verify result pointer ownership
+        let result_owner = result.witness();
+        let Some(key) = auth.get(&result_owner.id()) else {
+            return Err(format!(
+                "Error: Result Pointer auth not found"
+            ))
+        };
+
+        result_owner.unlock(key, &result.id())?;
+
+        // Get jobctr from Jobs cache
         let job_id = result.work_id();
         let can_consensus;
         let is_consensus;
@@ -242,7 +266,9 @@ impl<B: Balances, W: Worker> Core<B, W> {
             let job = self.jobs.get_mut_job(&job_id)?;
 
             // Add result pointer to job
-            job.add_result(result.clone());
+            // and the auth object
+            job.add_result(result.clone())?;
+            job.add_auth(result_owner, key.clone());
 
             can_consensus = job.can_consensus();
             is_consensus = job.is_consensus();
@@ -256,22 +282,40 @@ impl<B: Balances, W: Worker> Core<B, W> {
         // If job cannot reach consensus, withdraw job
         // revert utxo state
         if !can_consensus {
-            let (jobctr, utxos) = self.jobs.take_job(&job_id)
+            let (_, utxos) = self.jobs.take_job(&job_id)
                 .expect("Illegal: Contract should still exist");
 
-            self.revert_jobctr_utxos(jobctr, utxos);
+            self.revert_jobctr_utxos(utxos);
         }
 
         Ok(())
     }
 
+    // Handle bill
+    fn handle_bill(&mut self, bill: &Bill, auth: &HashMap<ID, Key>) -> AgentResult<()> {
+        // Get each transaction inputs from the 
+        self.get_bill_utxos(bill, auth)?;
+
+        let txctr = TxContract::new_with_auth(bill.clone(), auth.clone());
+        
+        // TODO: Add TxContract to chain
+        self.chain.add_ctrs(
+            vec![Contract::TX(txctr)]
+        );
+        
+        Ok(())
+    }
+
     // TODO: Handle received block
-    fn handle_proposal(&mut self, proposal: &Proposal) -> AgentResult<()> {
+    fn handle_proposer(&mut self, proposer: &Proposer, auth: &HashMap<ID, Key>) -> AgentResult<()> {
         // Get subusers and blockheader
-        let subusers = self.get_subusers(proposal.get_vrf_opt()?)?;
+        let subusers = self.get_subusers(proposer)?;
 
         // Subusers must be greater than 0
         if subusers > 0 {
+            // Create a new proposal
+            let proposal = Proposal::new(proposer.clone(), auth.clone());
+            
             // Add proposal to mempool and update subusers
             self.mempool.add_proposal(proposal, subusers);
 
@@ -286,13 +330,17 @@ impl<B: Balances, W: Worker> Core<B, W> {
     }
 
     // Handle received validator
-    fn handle_validator(&mut self, validated: &Validated) -> AgentResult<()> {
-        // Get subusers and blockheader
-        let subusers = self.get_subusers(validated.get_vrf_opt()?)?;
+    fn handle_validator(&mut self, validator: &Validator, auth: &HashMap<ID, Key>) -> AgentResult<()> {
+        // TODO: Get subusers and blockheader
+        let subusers = self.get_subusers(validator)?;
 
         // Subusers must be greater than 0
         if subusers > 0 {
-            // Add block to chain and update subusers
+            // Create new validated struct
+            let validated = Validated::new(validator.clone(), subusers, auth.clone());
+
+            // Add validated to mempool and update subusers
+            self.mempool.add_validator(validated)?;
 
             // If subusers count is more than threshold, vote on block
             // as validator
@@ -311,40 +359,59 @@ impl<B: Balances, W: Worker> Core<B, W> {
 
 // Handle Ledger State changes
 impl<T: Balances, W: Worker> Core<T, W> {
-
     // Try to take input UTXO's for jobcontracts
-    pub fn get_jobctr_utxos(&mut self, jobctr: &JobContract) -> AgentResult<Vec<TxOpt>> {
-        let utxos: Vec<TxOpt> = self.state
-            .get_ref_opts(&jobctr.get_tx()?)?
-            .into_iter()
-            .map(|(_, utxo)| utxo)
-            .collect();
+    pub fn get_workptr_utxos(
+        &mut self, 
+        workptr: &WorkPtr, 
+        auth: &HashMap<ID, Key>
+    ) -> AgentResult<Vec<(TxOptRef, TxOpt)>> {
+        // Get goldcoin utxo list, which is the only currency that work can be done with
+        let balances = self.state.get_mut_coin_balance_list();
 
-        Ok(utxos)
+        // List of utxos
+        let mut ref_opts: Vec<(TxOptRef, TxOpt)> = Vec::new();
+
+        for utxo_ref in workptr.ipts() {
+            // Ensure utxo exists
+            let Some(utxo) = balances.get(*utxo_ref) else {
+                return Err(format!(
+                    "Error: Tx Output {} not found.",
+                    functions::from_bytes(&utxo_ref.id())
+                ))
+            };
+
+            match state::confirm_utxo(&utxo, &workptr.id(), auth) {
+                Ok(_) => {
+                    ref_opts.push((utxo_ref.clone(), utxo))
+                },
+                Err(e) => {
+                    // Revert removed utxos
+                    for (utxo_ref, utxo) in ref_opts {
+                        balances.put(utxo_ref, utxo);
+                    }
+                    return Err(e);
+                }
+            };
+        }
+
+        Ok(ref_opts)
     }
 
     // Return utxo taken by a job back to state
     pub fn revert_jobctr_utxos(
         &mut self, 
-        jobctr: JobContract, 
-        utxos: Vec<TxOpt>
-    ) -> AgentResult<()> {
-        let tx =  jobctr.get_tx()?;
+        utxos: Vec<(TxOptRef, TxOpt)>
+    ) {
+        let balances = self.state.get_mut_coin_balance_list();
 
-        // Build iterators to put into state
-        let tx_ipts_iter = tx.ipts().iter();
-        let utxo_iter = utxos.into_iter();
-
-        // merge both iterators into tuple to update state
-        let ref_opts = tx_ipts_iter.zip(utxo_iter);
-
-        self.state.revert_ref_opts(&tx, ref_opts.collect());
-        Ok(())
+        for (utxo_ref, utxo) in utxos.into_iter().rev() {
+            balances.put(utxo_ref, utxo);
+        }
     }
 
-    // Subtracts Contract transaction inputs from the global state
+    // Subtracts transaction inputs from the global state
     // If inputs could not be found, a double spend error is assumed.
-    pub fn get_txctr_utxos(&mut self, txctr: &TxContract) -> AgentResult<()> {
+    pub fn get_bill_utxos(&mut self, bill: &Bill, auth: &HashMap<ID, Key>) -> AgentResult<()> {
         // Get the referenced utxos for each transaction.
         // If any issues occur, rollback the removed
 
@@ -352,10 +419,12 @@ impl<T: Balances, W: Worker> Core<T, W> {
         // rollback occurs, it can be referenced
         let mut tx_ref_opts = Vec::new();
 
-        for tx in txctr.get_tx().iter() {
+        for tx in bill.get_txs().iter() {
             // Try to get ref opts for txs
-            match self.state.get_ref_opts(tx) {
+            match self.state.get_ref_opts(tx, &bill.id(), auth) {
                 Ok(ref_opts) => {
+                    // TODO: Check ipts owners consented
+                    // Store tx opts
                     tx_ref_opts.push((tx, ref_opts));
                 },
                 Err(e) => {
@@ -367,44 +436,29 @@ impl<T: Balances, W: Worker> Core<T, W> {
                 }
                 
             };
-
         }
 
         Ok(())
-
-        
     }
 }
 
 // Handle methods for blocks
 impl<T: Balances, W: Worker> Core<T, W> {
-    // Create a new block
-    fn new_block(&mut self) -> Block {
-        // Get block from mempool
-        let block_body = self.mempool.get_block_body();
-
-        // Get latest block in chain which acts as new block's prev block
-        let prev_block = self.chain.latest_block().expect("Unable to get latest block");
-        
-        // Return new block
-        Block::new(prev_block.header(), block_body)
-    }
-
     /// Try to generate a new `Block` form a list of finalized `Contracts`
     /// to send to the network
     /// 
     /// A `Block` can only be valid to send to the rest of the network
     /// if the current node is chosen as a block proposer
     pub fn propose_block(&mut self) -> AgentResult<()> {
-        let block = self.new_block();
+        let block = self.chain.new_block();
 
-        // Attempt proposal to 
+        // Attempt proposer to 
         // send to the network.
-        let proposal = Proposal::new(&self.owner, block);
+        let proposer = Proposer::new(&self.owner, block);
         
         // If subusers is greater than 0, node has been chosen to propose
         // block.
-        if self.get_subusers(proposal.get_vrf_opt()?)? > 0  {
+        if self.get_subusers(&proposer)? > 0  {
             // TODO: Send proposal to network
             todo!()
         };
@@ -416,28 +470,27 @@ impl<T: Balances, W: Worker> Core<T, W> {
     /// to be the highest new gdc addition to the chain
     /// by sending it's `BlockHeader` to the network as a finalized `Block`
     pub fn finalize_block(&mut self) -> AgentResult<()> {
-        // Get finalized block header from chain
-        let Some(header) = self.chain.get_block_to_finalize() else {
+        // Get proposer from mempool to finalize
+        let Some(proposal) = self.mempool.get_proposal_to_finalize() else {
             return Err(format!(
-                "Error: No block to finalize"
+                "Error: No proposal to finalize"
             ))
         };
 
         // Build validator using block id (header hash)
-        let validator = Validator::new(&self.owner, &header.id());
+        let validator = Validator::new(
+            &self.owner, 
+            &self.chain.seed(), 
+            proposal.proposer()
+        );
 
         // Get subusers using VRF output from validator
         // If subusers is greater than 0, node has been chosen to vote on
         // block being finalized.
-        let subusers = self.get_subusers(
-            validator.verify(&header.id())?
-        )?;
+        let subusers = self.get_subusers(&validator)?;
 
         if subusers > 0 {
-            // Create validated to send to the network
-            let validated = Validated::new(header, validator, subusers);
-
-            // TODO: Send validated to network
+            // TODO: Send validator to network
             todo!()
         };
 
@@ -445,9 +498,9 @@ impl<T: Balances, W: Worker> Core<T, W> {
     }
 
     /// Get subusers using VRF ouptput
-    pub fn get_subusers(&self, vrf_opt: ID) -> AgentResult<u64> {
+    pub fn get_subusers(&self, voter: &impl Voter,) -> AgentResult<u64> {
         // User gdc balance
-        let user_amount = self.state.get_gdc_balance(self.owner.as_lock());
+        let user_amount = self.state.get_gdc_balance(voter.owner());
 
         // User total currency
         let total_currency = self.chain
@@ -455,7 +508,7 @@ impl<T: Balances, W: Worker> Core<T, W> {
             .expect("Error: Could not fetch total goldcoin data from blockchain");
 
         voting::subusers_count(
-            vrf_opt, 
+            voter.get_vrf_opt()?, 
             user_amount, 
             total_currency
         )
@@ -474,14 +527,10 @@ impl<T: Balances, W: Worker> Core<T, W> {
     /// 
     /// This process happens every epoch in a constant loop
     pub fn handle_epoch(&mut self) {
-        // Get finalized contracts
-        let ctrs = self.jobs.get_pending_ctrs();
-
-        // Add contracts to new sub block instance
-        let sub_block = SubBlock::new(ctrs);
-
-        // Add subblock to mempool
-        self.mempool.add_sub_block(sub_block);
+        // Add ctrs to cache
+        self.chain.add_ctrs(
+            self.jobs.get_pending_jobs()
+        );
     }
 
     /// Handle Synchronous finalization

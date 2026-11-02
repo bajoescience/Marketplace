@@ -1,8 +1,10 @@
-use borsh::{BorshDeserialize, BorshSerialize};
-use marketplace_helpers::{objects::{AgentResult, ID, IdHash}};
-use marketplace_wallet::{Owner, voting::{self, Role, VotingProof}};
+use std::collections::HashMap;
 
-use crate::{BlockHeader, Proposal, Proposer, Verify, WRVote};
+use borsh::{BorshDeserialize, BorshSerialize};
+use marketplace_helpers::{functions, objects::{AgentResult, ID, IdHash}};
+use marketplace_wallet::{Key, Lock, Owner, voting::{self, Role, VotingProof}};
+
+use crate::{Verify, par_exec::WRVote, sync_final::{BlockHeader, Proposer, voter::Voter}};
 
 // This is a validator role
 const ROLE: Role = Role::Validator;
@@ -11,15 +13,25 @@ const ROLE: Role = Role::Validator;
 #[derive(BorshSerialize, BorshDeserialize, Debug, Clone)]
 pub struct Validator {
     proof: VotingProof,
+
+    // Proposer ID
+    proposer: ID,
+
+    // Validated blockheader
+    header: BlockHeader,
 }
 
 impl Validator {
     /// Build a new validator using a block id
-    pub fn new(owner: &Owner, seed: &[u8]) -> Self {
+    pub fn new(owner: &Owner, seed: &[u8], proposer: &Proposer) -> Self {
         let votingproof = voting::vrf(owner, ROLE, seed);
+
+        let header = proposer.block().header();
 
         Self {
             proof: votingproof,
+            header: header.clone(),
+            proposer: proposer.id(),
         }
     }
 
@@ -38,6 +50,21 @@ impl Validator {
     }
 }
 
+impl Voter for Validator {
+    /// Get lock object representing proposer
+    fn owner(&self) -> Lock {
+        Lock::SIG(
+            functions::hash(self.pk())
+        )
+    }
+
+    fn get_vrf_opt(&self) -> AgentResult<ID> {
+        let seed = self.header.prev();
+
+        self.verify(&seed)
+    }
+}
+
 
 /// The `Validated` is the structure sent to the network to validate a 
 /// proposed `BlockHeader`
@@ -49,36 +76,30 @@ pub struct Validated {
     // Validator
     voter: Validator,
 
-    // Proposer
-    proposer: Proposer,
-
-    // Validated blockheader
-    header: BlockHeader,
-
     // Store subuser count
     // to be used as a vote count in
     // whiteroom
     subusers: u64,
+
+    // Authenticate Validated
+    auth: HashMap<ID, Key>
 }
 
 impl Validated {
     /// Create a new Validated using the block id and validator
-    pub fn new(validator: Validator, proposal: &Proposal, subusers: u64) -> Self {
-        let Proposal { block, voter } = proposal;
+    pub fn new(validator: Validator, subusers: u64, auth: HashMap<ID, Key>) -> Self {
         Self {
-            header: block.header().clone(),
             voter: validator,
-            proposer: voter.clone(),
-            subusers
+            subusers,
+            auth
         }
     }
 }
 
 // Getter methods
 impl Validated {
-    // Get VRF number to use to get subusers
-    pub fn get_vrf_opt(&self) -> AgentResult<ID> {
-        self.voter.verify(&self.header.id())
+    pub fn validator(&self) -> &Validator {
+        &self.voter
     }
 }
 
@@ -86,10 +107,16 @@ impl Validated {
 // it only validates the structure of the validated
 impl Verify for Validated {
     fn verify(&self) -> AgentResult<()> {
-        // Verify validator using block hash
-        self.voter.verify(&self.header.id())?;
+        let owner = self.voter.owner();
 
-        Ok(())
+        let Some(key) = self.auth.get(&owner.id()) else {
+            return Err(format!(
+                "Err: Key for Lock {} does not exist",
+                functions::from_bytes(&owner.id())
+            ))
+        };
+
+        owner.unlock(key, &self.validator().id())
     }
 }
 
@@ -101,7 +128,7 @@ impl PartialEq for Validated {
 
 impl WRVote for Validated {
     fn as_vote(&self) -> ID {
-        self.header.id()
+        self.voter.header.id()
     }
 
     fn votes(&self) -> usize {

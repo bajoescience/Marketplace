@@ -4,10 +4,37 @@
 //! storing, and updating 
 //! UTXO state
 
-use std::{collections::{HashMap}, format};
+use std::{collections::HashMap, format, panic};
 
 use marketplace_helpers::{functions, objects::{AgentResult, ID, IdHash, WU}};
-use marketplace_primitives::{Tx, tx::{TxOpt, TxOptRef}, TxIdentifier};
+use marketplace_primitives::par_exec::{Tx, TxIdentifier, TxOpt, TxOptRef, WorkPtr};
+use marketplace_wallet::{Key, Lock};
+
+// Helper function confirming utxo ownership
+pub fn confirm_utxo(
+    utxo: &TxOpt,
+    msg_id: &ID, 
+    auth: &HashMap<ID, Key>
+) -> AgentResult<()> {
+    // Ensure utxo owner consented
+    let owner = utxo.lock();
+            
+    let Some(key) = auth.get(&owner.id()) else {
+        return Err(format!(
+            "Error: Tx Output {} not found.",
+            functions::from_bytes(&utxo.id())
+        ))
+    };
+
+    owner.unlock(key, msg_id)
+}
+
+// Helper functin to revert utxo
+pub fn revert_utxo<B: Balances>(ref_opts: Vec<(TxOptRef, TxOpt)>, balances: &mut B) {
+    for (ipt, utxo) in ref_opts.into_iter().rev() {
+        balances.put(ipt, utxo);
+    }
+}
 
 /// Balances trait defines a set of methods
 /// that use a custom data structure to handle the adding 
@@ -23,11 +50,15 @@ pub trait Balances: Clone {
     /// The token type is necessary because only utxo of a token type can
     /// exist in the same transaction, and it is up to the implemntor of the trait
     /// to ensure this is always the case.
-    fn get(&mut self, utxo_ref: &TxOptRef) -> Option<TxOpt>;
+    fn get(&mut self, utxo_ref: TxOptRef) -> Option<TxOpt>;
 
     /// Put a UTXO into the balance sheet
     /// given the UTXO reference
-    fn put(&mut self, utxo_ref: &TxOptRef, utxo: TxOpt);
+    fn put(&mut self, utxo_ref: TxOptRef, utxo: TxOpt);
+
+    /// Get the balance of an owner in WU
+    /// given the owner's lock form
+    fn balance(&self, owner: Lock) -> WU;
 }
 
 /// Balances is a struct containing all
@@ -44,12 +75,26 @@ impl Balances for DefaultBalances {
         }
     }
 
-    fn get(&mut self, utxo_ref: &TxOptRef) -> Option<TxOpt> {
+    fn get(&mut self, utxo_ref: TxOptRef) -> Option<TxOpt> {
         self.list.remove(&utxo_ref.id())
     }
 
-    fn put(&mut self, utxo_ref: &TxOptRef, utxo: TxOpt) {
+    fn put(&mut self, utxo_ref: TxOptRef, utxo: TxOpt) {
         self.list.insert(utxo_ref.id(), utxo);
+    }
+
+    // The owner's balances list could be stored seperately
+    fn balance(&self, owner: Lock) -> WU {
+        let mut balance = WU::default();
+
+        // Iterate through list and find utxo's owned by 
+        // owner
+        for (_, utxo) in self.list.iter() {
+            if utxo.lock() == owner {
+                balance = balance + utxo.amount();
+            }
+        }
+        balance
     }
 }
 
@@ -66,8 +111,9 @@ impl DefaultBalances {
 /// Token Balances in the second layer
 #[derive(Clone)]
 pub struct State<B: Balances> {
-    // Hashmap<token acc_id, (Balances, initial tokens)>
     coin: B,
+
+    // Hashmap<token acc_id, (Balances, initial tokens)>
     tokens: HashMap<ID, (B, WU)>,
 }
 
@@ -79,53 +125,75 @@ impl<B: Balances> State<B> {
         }
     }
 
-    fn get_balances(&mut self, tx: &Tx) -> AgentResult<&mut B> {
-        // Check the appropiate token
+    /// Get goldcoin balance sheet
+    pub fn get_mut_coin_balance_list(&mut self) -> &mut B {
+        &mut self.coin
+    }
+
+    /// Get token balance sheet and total amount of token available
+    pub fn get_mut_token_balance_list(&mut self, tid: ID) -> Option<&mut B> {
+        self.tokens
+            .get_mut(&tid)
+            .map(|(balance_list, _)| balance_list)
+    }
+
+    pub fn get_tx_balances(&mut self, tx: &Tx) -> AgentResult<&mut B> {
         let balances = match tx.tid() {
             TxIdentifier::COIN => {
-                &mut self.coin       
+                &mut self.coin
             },
             TxIdentifier::TOKEN(tid) => {
-                let tid = tid.unwrap();
+                let tid = tid.expect("Illegal: Token ID must exist");
 
-                // If token does not exist, but is not a new token
-                // reject the token. 
-                if !self.tokens.contains_key(&tid) && tx.acc_id() != tid {
+                if tx.acc_id() == tid {  
+                    &mut self.tokens
+                        .entry(tid).or_insert((B::new(), tx.opt_sum())).0
+                } else {
                     return Err(format!(
                         "Error: Token {} does not exist",
                         functions::from_bytes(&tid)
-                    ))
+                    ));
                 }
-
-                // Get token
-                let token = self.tokens
-                    .entry(tid)
-                    .or_insert((B::new(), tx.opt_sum()));
-
-                &mut token.0
             }
         };
 
         Ok(balances)
+    } 
+
+    /// Get gdc balance of an owner
+    pub fn get_gdc_balance(&self, owner: Lock) -> WU {
+        self.coin.balance(owner)
+    }
+
+    /// Get token balance of an owner
+    /// using the token id
+    /// 
+    /// Returns Err if token does not exist
+    pub fn get_token_balance(&self, tid: ID, owner: Lock) -> AgentResult<WU> {
+        let Some(list) = self.tokens.get(&tid) else {
+            return Err(format!(
+                "Error: Token does not exist"
+            ))
+        };
+
+        Ok(list.0.balance(owner))
     }
 }
 
 impl<B: Balances> State<B> {
     /// Attempt to remove UTXO from state
-    pub fn get_ref_opts<'a>(&mut self, tx: &'a Tx) -> AgentResult<Vec<(&'a TxOptRef, TxOpt)>> {
-        let balances = self.get_balances(tx)?;
+    pub fn get_ref_opts(&mut self, tx: &Tx, msg_id: &ID, auth: &HashMap<ID, Key>) -> AgentResult<Vec<(TxOptRef, TxOpt)>> {
+        let balances = self.get_tx_balances(tx)?;
 
         // Keep track of used TxIO
         let mut ref_opts = Vec::new();
 
         // Get Tx outputs referenced by inputs in transaction
         for ipt in tx.ipts().iter() {
-            let Some(ref_opt) = balances.get(ipt) else {
+            let Some(opt) = balances.get(*ipt) else {
                 // If reference utxo could not be found, return
                 // all removed UTXO's and return error
-                for (ipt, utxo) in ref_opts.into_iter().rev() {
-                    balances.put(ipt, utxo);
-                }
+                revert_utxo(ref_opts, balances);
 
                 return Err(format!(
                     "Error: UTXO addressed by {} could not be found in Tx {}",
@@ -134,35 +202,38 @@ impl<B: Balances> State<B> {
                 ))
             };
 
-            ref_opts.push((ipt, ref_opt));
+            // Confirm output is signed by owner
+            confirm_utxo(&opt, msg_id, auth)?;
+
+            ref_opts.push((*ipt, opt));
         }
 
         Ok(ref_opts)
     }
 
     // Revert outputs gotten from state given any error
-    pub fn revert_ref_opts(&mut self, tx: &Tx, ref_opts: Vec<(&TxOptRef, TxOpt)>) {
+    pub fn revert_ref_opts(&mut self, tx: &Tx, ref_opts: Vec<(TxOptRef, TxOpt)>) {
         // Balances should already exists as we need to add input 
         // before adding outputs
-        let balances = self.get_balances(tx)
+        let balances = self.get_tx_balances(tx)
             .expect("Illegal: Token should be created by inputs first before outputs");
 
         // Add each output to the corresponding
         // owner's balance
         for (ipt, opt) in ref_opts.into_iter().rev() {
-            balances.put(ipt, opt);
+            balances.put(ipt.clone(), opt);
         }
     }
 
     // Add utxo to state
     pub fn put_opts(&mut self, tx: &Tx) {
-        let balances = self.get_balances(tx)
+        let balances = self.get_tx_balances(tx)
             .expect("Illegal: Token should exist, but not found");
 
         // Add each input back to the state
         for (index, utxo) in tx.opts().iter().rev().enumerate() {
             let ipt = TxOptRef::new(tx.id(), index);
-            balances.put(&ipt, utxo.clone());
+            balances.put(ipt, utxo.clone());
         }
     }
 }

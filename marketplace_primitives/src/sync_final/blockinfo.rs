@@ -1,7 +1,10 @@
 use borsh::{BorshDeserialize, BorshSerialize};
 use marketplace_helpers::functions;
 
-use crate::{Block, Validated, Whiteroom};
+use crate::{
+    par_exec::Whiteroom,
+    sync_final::{Block, Validated},
+};
 
 use marketplace_wallet::voting::EXPECTED_VOTERS;
 

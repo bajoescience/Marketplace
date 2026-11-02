@@ -6,7 +6,7 @@ pub use io::{TxOpt, TxOptRef};
 
 use borsh::{BorshDeserialize, BorshSerialize};
 use chrono::{TimeZone, Utc};
-use crate::{JobContract, Verify, helpers::{functions::{self, fee_price}, objects::{AgentResult, ID, IdHash, WU}}};
+use crate::{par_exec::JobContract, Verify, helpers::{functions::{self, fee_price}, objects::{AgentResult, ID, IdHash, WU}}};
 use crate::wallet::{Lock};
 
 
@@ -72,7 +72,7 @@ impl Tx {
     /// # Example
     /// 
     /// ```
-    /// use marketplace_primitives::{Tx, TxIdentifier};
+    ///     use marketplace_primitives::par_exec::{Tx, TxIdentifier};
     /// 
     /// let ver = 1;
     /// let tid = TxIdentifier::COIN;
@@ -296,7 +296,7 @@ impl Tx {
         self.opts()
             .iter()
             .map(|opt| 
-                if Lock::ACCOUNT(Self::gtt_tid()) != *opt.lock() {
+                if Lock::ACCOUNT(Self::gtt_tid()) != opt.lock() {
                     WU::default()
                 } else {
                     opt.amount()

@@ -1,15 +1,16 @@
 pub mod job;
 pub mod tx;
 
-use std::hash::Hash;
-
-use crate::Verify;
-
 pub use self::job::JobContract;
 pub use self::tx::TxContract;
 
 use borsh::{BorshDeserialize, BorshSerialize};
-use marketplace_helpers::objects::{AgentResult, ID, IdHash, WU};
+
+use crate::{
+    helpers::objects::{AgentResult, ID, IdHash, WU},
+    sync_final::BlockHeader,
+    Verify,
+};
 
 // Contract type for a job
 #[derive(BorshSerialize, BorshDeserialize, Debug, Clone)]
@@ -35,7 +36,7 @@ impl Contract {
 
     pub fn id(&self) -> ID {
         match self {
-            Self::JOB(jobctr) => jobctr.work_id(),
+            Self::JOB(jobctr) => jobctr.id(),
             Self::TX(txctr) => txctr.id()
         }
     }
@@ -62,14 +63,20 @@ impl Verify for Contract {
 // Tests here
 #[cfg(test)]
 pub mod tests {
-    use std::{assert_eq, thread};
+    use std::thread;
 
-use marketplace_helpers::objects::{AgentResult, CONTRACT_WHITEROOM_SIZE};
-    use marketplace_wallet::Owner;
     use crate::{
-        BlockHeader, Tx, TxIdentifier, par_exec::{contract::job::tests::{resultptr, workptr}}, tx::{TxOpt, TxOptRef}
+        helpers::objects::{AgentResult, CONTRACT_WHITEROOM_SIZE, IdHash, WU},
+        par_exec::{
+            Bill, Tx, TxIdentifier, TxOpt, TxOptRef,
+            contract::job::tests::{resultptr, workptr},
+        },
+        sync_final::BlockHeader,
+        wallet::Owner,
+        Verify,
     };
-    use super::*;
+
+    use super::{Contract, JobContract, TxContract};
 
     // Test Job contract
     pub fn jobctr() -> AgentResult<JobContract>  {
@@ -125,7 +132,7 @@ use marketplace_helpers::objects::{AgentResult, CONTRACT_WHITEROOM_SIZE};
     #[test]
     fn verify_jobctr_id() -> AgentResult<()> {
         let jobctr = jobctr()?;
-        let id = jobctr.work_id();
+        let id = jobctr.id();
 
         let ctr = Contract::JOB(jobctr);
 
@@ -147,10 +154,12 @@ use marketplace_helpers::objects::{AgentResult, CONTRACT_WHITEROOM_SIZE};
         
         let tx = Tx::new(0, TxIdentifier::COIN, Some(ipts), opts);
 
-        let mut txctr = TxContract::new(vec![tx]);
-        let key = owner.sign(&txctr.id());
+        let bill = Bill::new(vec![tx]);
+        let key = owner.sign(&bill.id());
 
-        txctr.add_auth(owner.as_lock(), key, false)?;
+        let mut txctr = TxContract::new(bill);
+
+        txctr.add_auth(owner.as_lock(), key);
 
         Ok(txctr)
     }
@@ -172,9 +181,9 @@ use marketplace_helpers::objects::{AgentResult, CONTRACT_WHITEROOM_SIZE};
             Contract::JOB(_) => panic!("Genesis contract must be a transaction contract"),
         };
 
-        assert_eq!(tx_contract.get_tx().len(), 2);
-        assert!(tx_contract.get_tx()[0].is_coin());
-        assert!(!tx_contract.get_tx()[1].is_coin());
+        assert_eq!(tx_contract.get_txs().len(), 2);
+        assert!(tx_contract.get_txs()[0].is_coin());
+        assert!(!tx_contract.get_txs()[1].is_coin());
     }
 
     // Contract identifiers should delegate to the wrapped contract type.

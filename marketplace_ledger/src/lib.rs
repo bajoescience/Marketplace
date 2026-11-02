@@ -1,4 +1,4 @@
-mod state;
+pub mod state;
 mod job;
 mod blockchain;
 mod mempool;

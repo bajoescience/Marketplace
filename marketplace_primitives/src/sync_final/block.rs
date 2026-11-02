@@ -7,7 +7,7 @@ pub use header::BlockHeader;
 pub use body::BlockBody;
 use marketplace_helpers::{ objects::{AgentResult, ID, IdHash}};
 
-use crate::{Contract};
+use crate::par_exec::{Contract};
 
 /// # Block
 /// 

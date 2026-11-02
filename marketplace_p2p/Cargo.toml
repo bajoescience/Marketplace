@@ -8,5 +8,6 @@ license = "MIT"
 
 [dependencies]
 marketplace_helpers = { path = "../marketplace_helpers", version = "0.1.0" }
+marketplace_wallet = {path = "../marketplace_wallet", version = "0.1.0"}
 borsh = {version = "1.6.1", features = ["derive"]}
 hex = "0.4.3"
