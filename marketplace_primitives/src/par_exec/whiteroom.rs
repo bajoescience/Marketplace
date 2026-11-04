@@ -14,7 +14,10 @@ pub trait WRVote: PartialEq {
 }
 
 #[derive(BorshSerialize, BorshDeserialize, Debug, Clone)]
-pub struct Whiteroom<T: WRVote, const MAX: usize> {
+pub struct Whiteroom<T, const MAX: usize>
+where 
+    T: WRVote + BorshSerialize + BorshDeserialize
+{
     list: ArrayVec<T, MAX>,
 
     // A voter may weigh more than one votes, so that has to be taken into account
@@ -25,8 +28,8 @@ pub struct Whiteroom<T: WRVote, const MAX: usize> {
 }
 
 impl<T, const MAX: usize> Whiteroom<T, MAX>
-where
-    T: WRVote 
+where 
+    T: WRVote + BorshSerialize + BorshDeserialize
 {
     /// Initialize 
     pub fn new() -> Whiteroom<T, MAX> {
@@ -38,12 +41,23 @@ where
             expected: functions::expected_wr_from_max(MAX),
         }
     }
+
+    /// Create an instance from bytes
+    pub fn from(bytes: &[u8]) -> Result<Self, std::io::Error> {
+        borsh::from_slice(bytes)
+    }
+
+    /// Serialize whiteroom
+    pub fn serialize(&self) -> Vec<u8> {
+        borsh::to_vec(&self)
+            .expect("Illegal: Error Serializing Whiteroom")
+    }
 }
 
 // Getter methods
 impl<T, const MAX: usize> Whiteroom<T, MAX>
-where
-    T: WRVote 
+where 
+    T: WRVote + BorshSerialize + BorshDeserialize
 {
     /// Check if whiteroom is full
     /// by amount of votes, not amount of individual whiteroom members
@@ -130,8 +144,8 @@ where
 
 // Setter methods
 impl<T, const MAX: usize> Whiteroom<T, MAX>
-where
-    T: WRVote 
+where 
+    T: WRVote + BorshSerialize + BorshDeserialize
 {
     // Add a new whiteroom member
     pub fn add_member(&mut self, member: T) -> AgentResult<usize> {
@@ -165,7 +179,7 @@ use marketplace_helpers::{objects::{CONTRACT_WHITEROOM_SIZE}};
 
     const MAX: usize = functions::max_wr_size_from_expected(CONTRACT_WHITEROOM_SIZE);
 
-    #[derive(PartialEq)]
+    #[derive(PartialEq, BorshDeserialize, BorshSerialize)]
     // (number, vote)
     pub struct TestMember(u8, ID);
 

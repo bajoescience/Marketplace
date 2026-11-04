@@ -2,11 +2,10 @@ mod proposed;
 
 pub use self::proposed::ProposedBlock;
 
-use std::{todo};
+use std::{cmp::Ordering, todo};
 
 use marketplace_primitives::{
-    par_exec::Whiteroom,
-    sync_final::{Proposal, Validated, blockinfo::BlockInfo},
+    par_exec::Whiteroom, sync_final::{Proposal, Proposer, Validated, blockinfo::BlockInfo},
 };
 
 use marketplace_helpers::{functions, objects::{AgentResult}};
@@ -33,13 +32,23 @@ impl Mempool {
 
     /// Add a proposal to the MempoolState and update total subusers count
     pub fn add_proposal(&mut self, proposal: Proposal, subusers: u64) {
-        self.proposed.add_proposal(proposal, subusers);
+        self.proposed.add(proposal, subusers);
         
+    }
+
+    // Update proposal count
+    pub fn update_subusers(&mut self, subusers: u64) {
+        self.proposed.update_subusers(subusers);
     }
 
     /// Get winning proposal to validate to network
     pub fn get_proposal_to_finalize(&mut self) -> Option<Proposal> {
         self.proposed.get_proposal()
+    }
+
+    /// Compare blocks to find which one is to be proposed
+    pub fn cmp_proposers(&self, proposer: &Proposer) -> Ordering {
+        self.proposed.cmp_block_gdc(proposer)
     }
 
     /// Get block info to put in blockchain

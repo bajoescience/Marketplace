@@ -32,12 +32,12 @@
 //! `Block` message
 
 mod epoch_state;
-use std::{any::{Any, TypeId}, collections::HashMap, format, todo};
+use std::{any::{Any, TypeId}, cmp::Ordering, collections::HashMap, format, todo, vec};
 
 use marketplace_helpers::{functions, objects::{AgentResult, Epoch, ID, IdHash}};
 use marketplace_ledger::{Balances, Blockchain, Jobs, Mempool, State, state};
 use marketplace_p2p::Message;
-use marketplace_primitives::{Verify, par_exec::{Bill, Contract, JobContract, ResultPtr, TxContract, TxOpt, TxOptRef, WorkPtr}, sync_final::{Proposal, Proposer, Validated, Validator, voter::Voter}};
+use marketplace_primitives::{Verify, par_exec::{Bill, Contract, JobContract, ResultPtr, TxContract, TxOpt, TxOptRef, WorkPtr}, sync_final::{Block, Proposal, Proposer, Validated, Validator, voter::Voter}};
 use marketplace_wallet::{Key, Owner, voting};
 use marketplace_worker::Worker;
 
@@ -51,16 +51,13 @@ use marketplace_worker::Worker;
 /// state data structure (block chain or mempool) to handle.
 pub struct Core<B: Balances, W: Worker> {
     // Blockchain representing dead state
-    chain: Blockchain,
+    chain: Blockchain<B>,
 
     // Cache of active jobs
     jobs: Jobs,
 
     // Mempool containing finalized contracts
     mempool: Mempool,
-
-    // Financial State of the network
-    state: State<B>,
 
     // Worker that executes a VDF, and a Job
     worker: Option<W>,
@@ -84,7 +81,7 @@ impl<B: Balances, W: Worker> Core<B, W> {
     /// 
     /// The `owner` is used to authenticate a node, and it is used to vote
     /// as proposer or validator of blocks on the network.
-    pub fn new(state: State<B>, worker: Option<W>, chain: Blockchain, owner: Owner) -> Self {
+    pub fn new(worker: Option<W>, chain: Blockchain<B>, owner: Owner) -> Self {
         // Initialize the blockchain as the dead state
 
         // TODO: Update chain with blocks from network first
@@ -103,10 +100,14 @@ impl<B: Balances, W: Worker> Core<B, W> {
             chain,
             jobs,
             mempool,
-            state,
             worker,
             owner,
         }
+    }
+
+    /// Access Financial State of the network
+    pub fn utxo_state(&mut self) -> &mut State<B> {
+        self.chain.state()
     }
 
     /// Handle `Messages` from the network and update `Core` state based on the type of message.
@@ -208,7 +209,7 @@ impl<B: Balances, W: Worker> Core<B, W> {
         let blk_hdr = workptr.blk_hdr();
 
         // referenced by workptr
-        let Some(block_info) = self.chain.get_blockinfo_by_id(blk_hdr).unwrap() else {
+        let Some(block) = self.chain.get_block_by_id(blk_hdr).unwrap() else {
             return Err(format!(
                 "Error: Block header does not exist"
             ))
@@ -220,7 +221,7 @@ impl<B: Balances, W: Worker> Core<B, W> {
 
         let jobctr = JobContract::new_with_auth(
             workptr.clone(),
-            block_info.block().header().clone(),
+            block.header().clone(),
             auth.clone()
         );
 
@@ -313,9 +314,25 @@ impl<B: Balances, W: Worker> Core<B, W> {
 
         // Subusers must be greater than 0
         if subusers > 0 {
+            // Proposer should be accepted if it contains the block 
+            // with the highest new gdc extension to the blockchain
+            // Equality of gdc is handled by this method, such that only for
+            // proposals containing the same block does the method return Ordering::Equal.
+            let Ordering::Greater = self.mempool.cmp_proposers(proposer) else {
+                // Update subuser count
+                self.mempool.update_subusers(subusers);
+                return Ok(())
+            };
+
             // Create a new proposal
             let proposal = Proposal::new(proposer.clone(), auth.clone());
-            
+
+            // TODO: Validate contracts in a proposal block by checking if
+            // contracts exists in chain cache, if not the contract updates state,
+            // and is added to cache
+            self.validate_block(proposal.block())?;
+
+
             // Add proposal to mempool and update subusers
             self.mempool.add_proposal(proposal, subusers);
 
@@ -366,7 +383,7 @@ impl<T: Balances, W: Worker> Core<T, W> {
         auth: &HashMap<ID, Key>
     ) -> AgentResult<Vec<(TxOptRef, TxOpt)>> {
         // Get goldcoin utxo list, which is the only currency that work can be done with
-        let balances = self.state.get_mut_coin_balance_list();
+        let balances = self.utxo_state().get_mut_coin_balance_list();
 
         // List of utxos
         let mut ref_opts: Vec<(TxOptRef, TxOpt)> = Vec::new();
@@ -402,7 +419,7 @@ impl<T: Balances, W: Worker> Core<T, W> {
         &mut self, 
         utxos: Vec<(TxOptRef, TxOpt)>
     ) {
-        let balances = self.state.get_mut_coin_balance_list();
+        let balances = self.utxo_state().get_mut_coin_balance_list();
 
         for (utxo_ref, utxo) in utxos.into_iter().rev() {
             balances.put(utxo_ref, utxo);
@@ -421,7 +438,7 @@ impl<T: Balances, W: Worker> Core<T, W> {
 
         for tx in bill.get_txs().iter() {
             // Try to get ref opts for txs
-            match self.state.get_ref_opts(tx, &bill.id(), auth) {
+            match self.utxo_state().get_ref_opts(tx, &bill.id(), auth) {
                 Ok(ref_opts) => {
                     // TODO: Check ipts owners consented
                     // Store tx opts
@@ -430,7 +447,7 @@ impl<T: Balances, W: Worker> Core<T, W> {
                 Err(e) => {
                     // Revert state changes
                     for (tx, ref_opts) in tx_ref_opts.into_iter() {
-                        self.state.revert_ref_opts(tx, ref_opts);
+                        self.utxo_state().revert_ref_opts(tx, ref_opts);
                     }
                     return Err(e)
                 }
@@ -444,6 +461,57 @@ impl<T: Balances, W: Worker> Core<T, W> {
 
 // Handle methods for blocks
 impl<T: Balances, W: Worker> Core<T, W> {
+    /// Validate block, and ensure every contract is valid, and can be gotten from state
+    pub fn validate_block(&mut self, block: &Block) -> AgentResult<()> {
+        for ctr in block.iter() {
+            // Verify contract
+            ctr.verify()?;
+
+            // If contract exists in cache, the contract 
+            // is already valid with respect to utxo state.
+            // Move on!
+            let None = self.chain.get_ctr(&ctr.id()) else {
+                continue;
+            };
+
+            // If contract is a Job Contract, check if it exists in
+            // jobs list.
+            // If it exists, then add complete job contract to chain cache, and remove
+            // job from joblist
+            if let Contract::JOB(jobctr) = ctr {
+                let Some(_) = self.jobs.take_job(&jobctr.id()) else {
+                    self.chain.add_ctrs(vec![ctr.clone()]);
+                    continue;
+                };
+            }
+
+            // Given that contract has not been found in any local storage
+            // we can now add the contract to chain cache after removing it's
+            // spent utxo from utxo state
+            match ctr {
+                Contract::JOB(jobctr) => {
+                    // If error removing spent utxos, return Err
+                    let _ = self.get_workptr_utxos(
+                        jobctr.input(), 
+                        jobctr.auth()
+                    )?;
+                },
+                Contract::TX(txctr) => {
+                    let _ = self.get_bill_utxos(
+                        txctr.bill(), 
+                        txctr.auth()
+                    )?;
+                }
+            }
+
+            // Add ctr to cache after removing utxos
+            // from state
+            self.chain.add_ctrs(vec![ctr.clone()]);
+        }
+
+        Ok(())
+    }
+
     /// Try to generate a new `Block` form a list of finalized `Contracts`
     /// to send to the network
     /// 
@@ -500,7 +568,7 @@ impl<T: Balances, W: Worker> Core<T, W> {
     /// Get subusers using VRF ouptput
     pub fn get_subusers(&self, voter: &impl Voter,) -> AgentResult<u64> {
         // User gdc balance
-        let user_amount = self.state.get_gdc_balance(voter.owner());
+        let user_amount = self.utxo_state().get_gdc_balance(voter.owner());
 
         // User total currency
         let total_currency = self.chain

@@ -4,10 +4,10 @@
 //! storing, and updating 
 //! UTXO state
 
-use std::{collections::HashMap, format, panic};
+use std::{collections::HashMap, format};
 
 use marketplace_helpers::{functions, objects::{AgentResult, ID, IdHash, WU}};
-use marketplace_primitives::par_exec::{Tx, TxIdentifier, TxOpt, TxOptRef, WorkPtr};
+use marketplace_primitives::par_exec::{Tx, TxIdentifier, TxOpt, TxOptRef};
 use marketplace_wallet::{Key, Lock};
 
 // Helper function confirming utxo ownership

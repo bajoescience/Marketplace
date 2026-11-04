@@ -20,14 +20,14 @@ const WHITEROOM_MAX: usize = functions::max_wr_size_from_expected(EXPECTED_VOTER
 #[derive(Debug, Clone, BorshSerialize, BorshDeserialize)]
 pub struct BlockInfo {
     block: Block,
-    validators: Whiteroom<Validated, WHITEROOM_MAX>
+    auth: Whiteroom<Validated, WHITEROOM_MAX>
 }
 
 impl BlockInfo {
-    pub fn new(block: Block, validators: Whiteroom<Validated, WHITEROOM_MAX>) -> Self {
+    pub fn new(block: Block, auth: Whiteroom<Validated, WHITEROOM_MAX>) -> Self {
         Self {
             block,
-            validators
+            auth
         }
     }
 
@@ -41,6 +41,12 @@ impl BlockInfo {
         borsh::to_vec(&self)
             .expect("Illegal: Error Serializing")
     }
+
+    /// Break block info into block and auth parts
+    /// taking owneship of the blockinfo and returning owned values
+    pub fn destroy(self) -> (Block, Whiteroom<Validated, WHITEROOM_MAX>) {
+        (self.block, self.auth)
+    }
 }
 
 // Getter methods
@@ -51,7 +57,7 @@ impl BlockInfo {
     }
 
     // Get Validators
-    pub fn validated(&self) -> &Whiteroom<Validated, WHITEROOM_MAX> {
-        &self.validators
+    pub fn auth(&self) -> &Whiteroom<Validated, WHITEROOM_MAX> {
+        &self.auth
     }
 }

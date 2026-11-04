@@ -7,8 +7,7 @@ pub use self::tx::TxContract;
 use borsh::{BorshDeserialize, BorshSerialize};
 
 use crate::{
-    helpers::objects::{AgentResult, ID, IdHash, WU},
-    sync_final::BlockHeader,
+    helpers::objects::{AgentResult, ID, WU},
     Verify,
 };
 

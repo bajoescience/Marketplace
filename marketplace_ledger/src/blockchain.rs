@@ -1,52 +1,57 @@
 use marketplace_helpers::{functions, objects::{AgentResult, Epoch, ID, IdHash, StdResult, WU}};
 
 use marketplace_primitives::{
-    Verify,
-    par_exec::Contract,
-    sync_final::{Block, BlockBody, blockinfo::BlockInfo},
+    Verify, par_exec::{Contract, Whiteroom}, sync_final::{Block, BlockBody, Validated, blockinfo::BlockInfo},
 };
 
-use std::{collections::HashMap, format, panic, path::Path, vec};
+use std::{collections::HashMap, format, panic, path::Path};
 
 use redb::{Database, Error, ReadableDatabase, ReadableTable, ReadableTableMetadata, TableDefinition};
 
 /// Store all `BlockInfo` directly and address them by their id
 /// 
-/// **Note: Only `Genesis Block` is stored as a lone `Block`, every other `Block` is stored as `BlockInfo`
-/// which includes the following:**
 /// 
-/// - Block 
-/// 
-/// - Proposer
-/// 
-/// - Validators
-/// 
-/// block_id -> BlockInfo
+/// block_id -> Block
 const BLOCKS: TableDefinition<&[u8], &[u8]> = TableDefinition::new("blocks");
 
 /// Store each block index so as to get block id of corresponding epoch
 /// 
-/// epoch -> block_id
-const INDEX: TableDefinition<Epoch, &[u8]> = TableDefinition::new("index");
+/// index -> block_id
+const INDEXES: TableDefinition<Epoch, &[u8]> = TableDefinition::new("indexes");
+
+/// Store list of validators that authenticate block
+/// 
+/// index -> Validators
+const AUTHS: TableDefinition<Epoch, &[u8]> = TableDefinition::new("auths");
 
 /// Store metadata for the blockcjain for example:
 /// genesis block ("genesis" -> [u8; 32])
 /// total goldcoin in chain ("gdc": [u8; 16])
 const METADATA: TableDefinition<&str, &[u8]> = TableDefinition::new("metadata");
 
+use marketplace_wallet::voting::EXPECTED_VOTERS;
+
+use crate::{Balances, State};
+
+// MAX whiteroom members for validators
+const WHITEROOM_MAX: usize = functions::max_wr_size_from_expected(EXPECTED_VOTERS);
+
 // # Blockchain
 // Store list of `Blocks`
 // that can be used to build state
-pub struct Blockchain {
+pub struct Blockchain<B: Balances> {
     // Database
     db: Database,
+
+    // UTXO State
+    state: State<B>,
 
     // Store key value pair of
     // contract id and Contract to be stored
     cache: Option<HashMap<ID, Contract>>,
 }
 
-impl Blockchain {
+impl<B: Balances> Blockchain<B> {
     // Initialize blockchain database tables
     pub fn init_tables(db: &Database) -> Result<(), Error> {
         // Genesis block
@@ -63,7 +68,7 @@ impl Blockchain {
 
             // Open Index table
             //  Store index -> Block id
-            let mut index = write_txn.open_table(INDEX)?;
+            let mut indexes = write_txn.open_table(INDEXES)?;
 
             // Open metadata table
             let mut metadata = write_txn.open_table(METADATA)?;
@@ -77,11 +82,11 @@ impl Blockchain {
                 metadata.insert("genesis", genesis_id.as_slice())?;
                 metadata.insert("gdc", genesis.total_gdc().as_slice())?;
 
-                // Clear all previous epochs if they exist
-                while let Some(_) = index.pop_first()? {};
+                // Clear all previous indexes if they exist
+                while let Some(_) = indexes.pop_first()? {};
 
-                // Add genesis data to epoch
-                index.insert(0, genesis_id.as_slice())?;
+                // Add genesis data to index
+                indexes.insert(0, genesis_id.as_slice())?;
 
                 // Insert genesis block
                 blocks.insert(genesis_id.as_slice(), genesis.serialize().as_slice())?;
@@ -98,7 +103,7 @@ impl Blockchain {
     /// using the path of the blockchain database file
     /// This is used in the initialization 
     /// of the Marketplace State
-    pub fn init(path: impl AsRef<Path>) -> StdResult<Self> {
+    pub fn init(path: impl AsRef<Path>, state: State<B>) -> StdResult<Self> {
         // Initialize blockchain database
         let db = Database::create(path)?;
 
@@ -106,6 +111,7 @@ impl Blockchain {
 
         Ok(Self {
             db,
+            state,
             cache: Some(HashMap::new()),
         })
     }
@@ -113,12 +119,13 @@ impl Blockchain {
     // Validate a contract
     fn validate_contract(&self, ctr: &Contract) -> AgentResult<()> {
         match ctr {
-            Contract::TX(txctr) => txctr.verify(),
+            Contract::TX(txctr) => {
+                txctr.verify()
+            },
             Contract::JOB(jobctr) => {
-
                 // Get blockinfo referenced by Job contract
-                let Some(_) = self.get_blockinfo_by_id(&jobctr.get_blk_hdr().id())
-                    .expect("Error encountered finding block from database") 
+                let Some(_) = self.get_block_by_id(&jobctr.get_blk_hdr().id())
+                    .expect("Error encountered finding block referenced by contract from blockchain DB") 
                 else {
                     return Err(format!(
                         "Error: Block {} does not exist in Blockchain",
@@ -139,7 +146,7 @@ impl Blockchain {
             self.validate_contract(ctr)?;
         }
 
-        // Validate block header using previous block
+        // Validate block header using previous block header
         let prev_block = self.latest_block()
             .expect("Latest block could not be fetched");
 
@@ -148,7 +155,7 @@ impl Blockchain {
 }
 
 // Handle modifying block body
-impl Blockchain {
+impl<B: Balances> Blockchain<B> {
     /// Add a sub block to block body to be proposed
     pub fn add_ctrs(&mut self, ctrs: Vec<Contract>) {
         // Cache should always have a vector because the cache should
@@ -199,45 +206,58 @@ impl Blockchain {
 
         cache.remove(&id)
     }
+
+    /// Get contract from cache if it exists
+    pub fn get_ctr(&self, id: &ID) -> Option<&Contract> {
+        let cache = self.cache
+            .as_ref()
+            .expect("Illegal: Cache should not be in None state");
+
+        cache.get(id)
+    } 
     
 }
 
-// Getter methods
-impl Blockchain {
-    /// Find blockInfo using block ID
-    /// 
-    /// Note: This only works for non genesis id
-    /// it would return `None` for genesis id, 
-    /// 
-    /// use the `genesis_block()` method instead to get
-    /// genesis block
-    pub fn get_blockinfo_by_id(&self, id: &[u8]) -> StdResult<Option<BlockInfo>> {
+// Getter methods for UtxO state
+impl<B: Balances> Blockchain<B> {
+    pub fn state(&mut self) -> &mut State<B> {
+        &mut self.state
+    }
+}
+
+// Getter methods for database
+impl<B: Balances> Blockchain<B> {
+    /// Get block from index
+    pub fn get_block_by_id(&self, id: &[u8]) -> StdResult<Option<Block>> {
         let read_txn = self.db.begin_read()?;
 
-        // Get genesis header, which should exist
-        // or panic
-        let Some(genesis) = read_txn
-            .open_table(METADATA)?
-            .get("genesis")?
-        else {
-            panic!("Illegal: Blockchain has no genesis block")
-        };
+        // Get Block option indicating absence or presence of the block.
+        let block_option = read_txn.open_table(BLOCKS)?
+            .get(id)?;
 
-        // Block id must not be genesis id
-        if id == genesis.value() {
-            return Ok(None);
-        }
+        
+        Ok(
+            block_option.map(
+                |blk_bytes| 
+                Block::from(blk_bytes.value())
+                    .expect("Error: Block bytes are invalid")
+            )
+        )
+    }
 
-        // If block does not exist, return None
-        let Some(block_bytes) = read_txn
-            .open_table(BLOCKS)?
-            .get(id)?
-        else {
-            return Ok(None);
-        };
+    /// Get auth by index
+    pub fn get_auth_by_index(&self, index: Epoch) -> StdResult<Option<Whiteroom<Validated, WHITEROOM_MAX>>> {
+        let read_txn = self.db.begin_read()?;
+
+        let auth_option = read_txn.open_table(AUTHS)?
+            .get(index)?;
 
         Ok(
-            Some(BlockInfo::from(block_bytes.value())?)
+            auth_option.map(
+                |auth_bytes|
+                Whiteroom::from(auth_bytes.value())
+                    .expect("Error: Auth bytes are invalid")
+            )
         )
     }
 
@@ -265,32 +285,51 @@ impl Blockchain {
         Ok(Block::from(block_bytes.value())?)
     }
 
-    /// Get block by epoch
-    pub fn get_blockinfo_by_index(&self, index: u64) -> StdResult<Option<BlockInfo>> {
+    /// Get blockinfo by index
+    /// 
+    /// Note that this method returns None for the genesis index of 0
+    /// 
+    /// It also returns None for indexes not found in the blockchain DB
+    pub fn get_blockinfo_by_index(&self, index: Epoch) -> StdResult<Option<BlockInfo>> {
         let read_txn = self.db.begin_read()?;
 
+        // Genesis block info does not exist
+        if index == 0 {
+            return Ok(None)
+        }
+
+        let auth_option = self.get_auth_by_index(index)?;
+
         // Get block id from epoch table if it exists
-        let Some(block_id) = read_txn.open_table(INDEX)?
+        let Some(block_id) = read_txn.open_table(INDEXES)?
             .get(index)?
         else {
             return Ok(None)
         };
 
-        self.get_blockinfo_by_id(block_id.value())
+        // Get block
+        let block_option = self.get_block_by_id(block_id.value())?;
+
+        let (Some(block), Some(auth)) = (block_option, auth_option) else {
+            return Ok(None)
+        };
+
+        Ok(Some(BlockInfo::new(block, auth)))
+    
     }
 
     // Latest blockinfo entry in the blockchain
     fn latest_epoch_entry(&self) -> StdResult<(Epoch, ID)>  {
-        let epoch = self.db
+        let indexes = self.db
             .begin_read()?
-            .open_table(INDEX)?;
+            .open_table(INDEXES)?;
 
         // Epoch table must at least contain genesis block id for epoch 0.
-        let (epoch, block_id_bytes) = epoch.last()?
+        let (index, block_id_bytes) = indexes.last()?
             .expect("Illegal: Blocks table should not be empty and must contain a genesis block");
 
         Ok((
-            epoch.value(),
+            index.value(),
             block_id_bytes.value().try_into()?
         ))
     }
@@ -315,13 +354,13 @@ impl Blockchain {
             return Ok(self.genesis_block()?)
         }
 
-        let block = self.get_blockinfo_by_id(blk_id.as_slice())?
+        let block = self.get_block_by_id(blk_id.as_slice())?
             .expect("Error: Blockchain should have at least genesis block");
 
-        Ok(block.block().clone())
+        Ok(block)
     }
 
-    /// Get seed for final sync round 
+    /// Get seed for syncchronous finalization rounds 
     pub fn seed(&self) -> ID {
         self.latest_block().unwrap().header().id()
     }
@@ -369,10 +408,13 @@ impl Blockchain {
 }
 
 // Setter methods
-impl Blockchain {
+impl<B: Balances> Blockchain<B> {
     // Add to file
     fn add_to_db(&mut self, blockinfo: BlockInfo) -> StdResult<()> {
-        let block = blockinfo.block();
+        // Sepearte blockinfo into block and auth
+        let (block, auth) = blockinfo.destroy();
+        let index = block.header().index();
+
         let write_txn = self.db.begin_write()?;
 
         {
@@ -382,15 +424,20 @@ impl Blockchain {
 
             metadata.insert("gdc", gdc.inner().to_be_bytes().as_slice())?;
 
+
             // Chain must have checked if block index immediately follows the
             // latest block
-            let mut index = write_txn.open_table(INDEX)?;
+            let mut indexes = write_txn.open_table(INDEXES)?;
             
-            index.insert(block.header().index(), block.id().as_slice())?;
+            indexes.insert(index, block.id().as_slice())?;
 
-            // Update blocks with block info
+
+            // Update blocks and auths tables with block info data
             let mut blocks = write_txn.open_table(BLOCKS)?;
-            blocks.insert(block.id().as_slice(), blockinfo.serialize().as_slice())?;
+            blocks.insert(block.id().as_slice(), block.serialize().as_slice())?;
+
+            let mut auths = write_txn.open_table(AUTHS)?;
+            auths.insert(index, auth.serialize().as_slice())?;
         }
 
         write_txn.commit()?;
@@ -419,12 +466,12 @@ impl Blockchain {
 
 // Iterator struct for blockchain
 // to iterate through blocks
-struct BlockChainIterator<'a> {
+struct BlockChainIterator<'a, B: Balances> {
     index: u64,
-    chain: &'a Blockchain
+    chain: &'a Blockchain<B>
 }
 
-impl<'a> Iterator for BlockChainIterator<'a> {
+impl<'a, B: Balances> Iterator for BlockChainIterator<'a, B> {
     type Item = BlockInfo;
 
     // Returns next block
@@ -441,6 +488,8 @@ impl<'a> Iterator for BlockChainIterator<'a> {
 
 #[cfg(test)]
 mod tests {
+
+use crate::state;
 
 // These tests exercise the blockchain lifecycle: initialization, block publication,
 // block lookup, persistence, iteration, validation, and recent-block tracking.
@@ -506,7 +555,8 @@ use marketplace_wallet::Owner;
     #[test]
     fn init_blockchain() -> StdResult<()> {
         let path = test_db("init");
-        let chain = Blockchain::init(&path)?;
+        let state: State<state::DefaultBalances> = State::new();
+        let chain = Blockchain::init(&path, state)?;
 
         // Only one block
         assert_eq!(chain.len()?, 1);
@@ -524,7 +574,8 @@ use marketplace_wallet::Owner;
     #[test]
     fn iterator_returns_none_after_the_tip() -> StdResult<()> {
         let path = test_db("iterator_after_tip");
-        let chain = Blockchain::init(&path)?;
+        let state: State<state::DefaultBalances> = State::new();
+        let chain = Blockchain::init(&path, state)?;
 
         assert!(chain.iter(chain.len()?).next().is_none());
         assert!(chain.get_blockinfo_by_index(1)?.is_none());
@@ -537,9 +588,10 @@ use marketplace_wallet::Owner;
     #[test]
     fn returns_none_for_unknown_block_id() -> StdResult<()> {
         let path = test_db("unknown_block_id");
-        let chain = Blockchain::init(&path)?;
+        let state: State<state::DefaultBalances> = State::new();
+        let chain = Blockchain::init(&path, state)?;
 
-        assert!(chain.get_blockinfo_by_id(&[42u8; 32])?.is_none());
+        assert!(chain.get_block_by_id(&[42u8; 32])?.is_none());
 
         fs::remove_file(path)?;
         Ok(())

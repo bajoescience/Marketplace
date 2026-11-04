@@ -54,6 +54,21 @@ impl TxContract {
     }
 }
 
+// Getter methods
+impl TxContract {
+    pub fn id(&self) -> ID {
+        self.bill.id()
+    }
+
+    pub fn bill(&self) -> &Bill {
+        &self.bill
+    }
+
+    pub fn auth(&self) -> &HashMap<ID, Key> {
+        &self.auth
+    }
+}
+
 // Setter methods
 impl TxContract {
     pub fn get_txs(&self) -> &Vec<Tx> {

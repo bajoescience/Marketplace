@@ -1,6 +1,6 @@
 use std::cmp::Ordering;
 
-use marketplace_primitives::sync_final::Proposal;
+use marketplace_primitives::sync_final::{Proposal, Proposer};
 
 
 pub struct ProposedBlock {
@@ -17,30 +17,41 @@ impl ProposedBlock {
         self.proposer_count += subusers;
     }
 
-    pub fn add_proposal(&mut self, proposal: Proposal, subusers: u64) {
+    // Update proposal count
+    pub fn update_subusers(&mut self, subusers: u64) {
+        self.proposer_count += subusers;
+    }
+
+    // Compare new gdc of blocks, if proposer gdc is greater
+    // the method returns Ordering::Greater
+    // if less, returns Ordering::Less
+    // if both contain the same blocks, method returns Ordering::Equal
+    pub fn cmp_block_gdc(&self, proposer: &Proposer) -> Ordering {
         match &self.proposal {
             Some(current) => {
                 // The proposal with block having the greater gdc is chosen as the main proposal
-                match proposal.block().header().total_gdc().partial_cmp(
+                let ordering = proposer.block().header().total_gdc().partial_cmp(
                     &current.block().header().total_gdc()
-                ).unwrap() {
-                    Ordering::Greater => {
-                        self.add(proposal.clone(), subusers);
-                    },
-                    Ordering::Equal => {
-                        // Comapre block id, the one with lower block id is chosen
-                        if proposal.block().id() < current.block().id() {
-                            self.add(proposal.clone(), subusers);
-                        }
-                    },
-                    Ordering::Less => {
-                        // Just update subusers
-                        self.proposer_count += subusers;
-                    },
+                ).unwrap();
+
+                if let Ordering::Equal = ordering {
+                    // Comapre block ids, the one with lower block id is considered greater
+                    let proposer_id = proposer.block().id();
+                    let current_id = current.block().id();
+
+                    if proposer_id < current_id {
+                        return Ordering::Greater;
+                    } else if proposer_id > current_id {
+                        return  Ordering::Less;
+                    } else {
+                        return Ordering::Equal;
+                    }
                 }
+
+                return ordering;
             },
             None => {
-                self.add(proposal.clone(), subusers);
+                Ordering::Greater
             }
         }
     }

@@ -122,7 +122,10 @@ impl JobContract {
             )
     }
 
-    // Get 
+    // Get auth
+    pub fn auth(&self) -> &HashMap<ID, Key> {
+        &self.auth
+    }
 }
 
 // Setter methods

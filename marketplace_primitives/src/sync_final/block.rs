@@ -48,6 +48,12 @@ impl Block {
     pub fn from(bytes: &[u8]) -> Result<Self, std::io::Error> {
         borsh::from_slice(bytes)
     }
+
+    // Serialize
+    pub fn serialize(&self) -> Vec<u8> {
+        borsh::to_vec(&self)
+            .expect("Illegal: Error Serializing Block")
+    }
 }
 
 // Getter functions
@@ -80,12 +86,6 @@ impl Block {
     /// Owned Block iterator for ctrs consuming the block
     pub fn iter_owned(self) -> impl Iterator<Item = Contract> {
         self.body.owned_contents()
-    }
-
-    // Serialize
-    pub fn serialize(&self) -> Vec<u8> {
-        borsh::to_vec(&self)
-            .expect("Illegal: Error Serializing")
     }
 
     // Total gdc in chain after block is added
