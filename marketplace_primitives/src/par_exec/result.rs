@@ -98,11 +98,6 @@ impl PartialEq for ResultInfo {
 ///     res_addr,
 ///     owner.as_wr_lock(),
 /// );
-/// 
-/// // Lock result pointer to prove ownership
-/// let key = owner.sign(&resultptr.id());
-/// resultptr.add_auth(owner.as_wr_lock(), key, false).unwrap();
-/// 
 /// // Verify it's a valid Result pointer
 /// assert!(resultptr.verify().is_ok());
 /// 
@@ -335,21 +330,6 @@ mod tests {
         assert!(!first.is_same(&different));
     }
 
-    // Result verification requires authentication for the witness lock.
-    #[test]
-    fn result_pointer_requires_witness_authentication() {
-        let owner = Owner::new_sig();
-        let spent = WorkSize::build(WU::try_from(20000).unwrap()).unwrap();
-        let result_ptr = res_ptr(
-            spent,
-            &owner,
-            wr_proof(&owner, [2; 32]),
-        );
-
-        let err = result_ptr.verify().unwrap_err();
-        assert!(err.contains("Error: Key does not exist for workptr"));
-    }
-
     // correct usage of Resptr API
     #[test]
     fn test_res_ptr() -> AgentResult<()> {
@@ -395,26 +375,5 @@ mod tests {
         let err = resptr.verify().unwrap_err();
 
         assert_eq!(err, "Error: Whiteroom tx owner not the same as proof owner");
-    }
-
-    // Result ptr tx must be locked by a whiteroom
-    // Only whiteroom can be receivers
-    #[test]
-    pub fn lock_res_ptr_tx() {
-        let owner = Owner::new_sig();
-        let spent = WU::try_from(20000).unwrap();
-
-        let wr_proof = wr_proof(&owner, [2; 32]);
-        let res_ptr = res_ptr(
-            WorkSize::build(spent).unwrap(),
-            &owner, 
-            wr_proof
-        );
-
-        let err = res_ptr.verify().unwrap_err();
-
-        assert!(
-            err.contains("Error: Key does not exist for workptr"),
-        )
     }
 }

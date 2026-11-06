@@ -60,3 +60,75 @@ impl ProposedBlock {
         self.proposal.clone()
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use marketplace_primitives::sync_final::{Block, Proposer, Proposal};
+    use marketplace_wallet::Owner;
+
+    use super::ProposedBlock;
+
+    fn proposal() -> Proposal {
+        let owner = Owner::new_sig();
+        Proposal::new(Proposer::new(&owner, Block::genesis()), Default::default())
+    }
+
+    // Adding proposals should retain the latest proposal and accumulate its proposer count.
+    #[test]
+    fn add_stores_proposal_and_accumulates_count() {
+        let mut proposed = ProposedBlock {
+            proposal: None,
+            proposer_count: 0,
+        };
+        let proposal = proposal();
+
+        proposed.add(proposal, 3);
+
+        assert_eq!(proposed.proposer_count, 3);
+        assert!(proposed.get_proposal().is_some());
+    }
+
+    // Additional proposer support should increase the tally without replacing the proposal.
+    #[test]
+    fn update_subusers_changes_only_the_count() {
+        let mut proposed = ProposedBlock {
+            proposal: Some(proposal()),
+            proposer_count: 4,
+        };
+
+        proposed.update_subusers(5);
+
+        assert_eq!(proposed.proposer_count, 9);
+        assert!(proposed.get_proposal().is_some());
+    }
+
+    // The initial proposal candidate should outrank the empty proposed-block state.
+    #[test]
+    fn candidate_outranks_empty_proposal_state() {
+        let proposed = ProposedBlock {
+            proposal: None,
+            proposer_count: 0,
+        };
+        let candidate = proposal();
+
+        assert_eq!(
+            proposed.cmp_block_gdc(candidate.proposer()),
+            std::cmp::Ordering::Greater
+        );
+    }
+
+    // A block identical to the current proposal should compare as equal.
+    #[test]
+    fn identical_candidate_compares_equal() {
+        let proposal = proposal();
+        let mut proposed = ProposedBlock {
+            proposal: Some(proposal.clone()),
+            proposer_count: 1,
+        };
+
+        assert_eq!(
+            proposed.cmp_block_gdc(proposal.proposer()),
+            std::cmp::Ordering::Equal
+        );
+    }
+}

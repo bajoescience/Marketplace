@@ -139,7 +139,8 @@ impl JobContract {
 
             let Some(key) = self.auth.get(&witness.id()) else {
                 return Err(format!(
-                    "Error: Result Pointer could not be unlocked" 
+                    "Error: Result Pointer witness {} could not be unlocked",
+                    functions::from_bytes(&witness.id())
                 ))
             };
 

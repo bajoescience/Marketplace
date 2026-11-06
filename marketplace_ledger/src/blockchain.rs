@@ -73,6 +73,9 @@ impl<B: Balances> Blockchain<B> {
             // Open metadata table
             let mut metadata = write_txn.open_table(METADATA)?;
 
+            // Create auths table
+            write_txn.open_table(AUTHS)?;
+
             // If block table is empty,
             // clear other tables and initialize them
             // with genesis block.
@@ -666,6 +669,46 @@ use marketplace_wallet::Owner;
         let chain = Blockchain::init(&path, state)?;
 
         assert!(chain.get_block_by_id(&[42u8; 32])?.is_none());
+
+        fs::remove_file(path)?;
+        Ok(())
+    }
+
+    // The genesis block should be retrievable and recognized as the latest recent block.
+    #[test]
+    fn genesis_block_is_recent_and_retrievable() -> StdResult<()> {
+        let path = test_db("genesis_recent");
+        let state: State<state::DefaultBalances> = State::new();
+        let chain = Blockchain::init(&path, state)?;
+        let genesis = chain.genesis_block()?;
+
+        assert_eq!(genesis.id(), Block::genesis().id());
+        assert!(chain.is_recent(genesis.id())?);
+        assert!(!chain.is_recent([42; 32])?);
+
+        fs::remove_file(path)?;
+        Ok(())
+    }
+
+    // Contracts added to the cache should be included in the next block and removed from the cache.
+    #[test]
+    fn cached_contracts_are_consumed_by_new_block() -> StdResult<()> {
+        let path = test_db("cached_contracts");
+        let state: State<state::DefaultBalances> = State::new();
+        let mut chain = Blockchain::init(&path, state)?;
+        let contract = Contract::genesis();
+        let id = contract.id();
+        chain.add_ctrs(vec![contract]);
+
+        assert!(chain.get_ctr(&id).is_some());
+
+        let block = chain.new_block();
+
+        assert_eq!(block.index(), 1);
+        assert_eq!(block.header().prev(), Block::genesis().id());
+        assert_eq!(block.ctrs().len(), 1);
+        assert!(chain.get_ctr(&id).is_none());
+        assert!(chain.new_block().ctrs().is_empty());
 
         fs::remove_file(path)?;
         Ok(())

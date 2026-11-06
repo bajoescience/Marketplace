@@ -277,5 +277,43 @@ mod tests {
 
         assert!(WorkSize::build(bad_size).is_err());
         assert!(WorkSize::build(good_size).is_ok());
-    } 
+    }
+
+    // Work-unit constants should follow the documented decimal denominations.
+    #[test]
+    fn work_unit_denominations_and_scaling() {
+        assert_eq!(WU::GDS().inner(), 3_000_000_000);
+        assert_eq!(WU::GDC().inner(), 3_000_000_000_000);
+        assert_eq!(WU::GDB().inner(), 3_000_000_000_000_000);
+        assert_eq!(WU::single().ten_fold().inner(), 10);
+    }
+
+    // WorkSize should include the documented minimum and maximum endpoints.
+    #[test]
+    fn work_size_accepts_inclusive_limits() {
+        assert!(WorkSize::build(MIN_WORK_SIZE).is_ok());
+        assert!(WorkSize::build(MAX_WORK_SIZE).is_ok());
+    }
+
+    // WorkSize should reject amounts exceeding its maximum.
+    #[test]
+    fn work_size_rejects_amount_above_maximum() {
+        let too_large = WU::try_from(MAX_WORK_SIZE.inner() + 1).unwrap();
+
+        assert!(WorkSize::build(too_large).is_err());
+    }
+
+    // WU arithmetic and display should preserve values and use grouped decimal formatting.
+    #[test]
+    fn work_unit_arithmetic_sum_and_display() {
+        let first = WU::try_from(1_200).unwrap();
+        let second = WU::try_from(300).unwrap();
+
+        assert_eq!((first + second).inner(), 1_500);
+        assert_eq!((first - second).inner(), 900);
+        assert_eq!((first * second).inner(), 360_000);
+        assert_eq!((first / second).inner(), 4);
+        assert_eq!([first, second].into_iter().sum::<WU>().inner(), 1_500);
+        assert_eq!(WU::try_from(1_234_567).unwrap().to_string(), "1,234,567");
+    }
 }

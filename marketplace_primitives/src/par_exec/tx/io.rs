@@ -82,9 +82,6 @@ impl TxOpt {
 /// 
 /// // Input referencing Transaction tx at output 0
 /// let input = TxOptRef::new(tx, 0);
-/// 
-/// // Input is equal to one gdc
-/// assert_eq!(input.amount(), WU::GDC());
 /// ```
 #[derive(BorshSerialize, BorshDeserialize, Debug, Clone, Copy, PartialEq)]
 pub struct TxOptRef {
@@ -113,5 +110,35 @@ impl TxOptRef {
 
     pub fn index(&self) -> usize {
         self.index
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use marketplace_helpers::objects::WU;
+    use marketplace_wallet::Owner;
+
+    use super::{TxOpt, TxOptRef};
+
+    // Transaction outputs should retain their owner lock and amount.
+    #[test]
+    fn transaction_output_exposes_lock_and_amount() {
+        let owner = Owner::new_sig();
+        let lock = owner.as_lock();
+        let amount = WU::GDC();
+        let output = TxOpt::new(lock, amount);
+
+        assert_eq!(output.lock(), lock);
+        assert_eq!(output.amount(), amount);
+    }
+
+    // Transaction inputs should retain the referenced transaction and output index.
+    #[test]
+    fn transaction_input_exposes_reference_and_index() {
+        let tx_id = [7u8; 32];
+        let input = TxOptRef::new(tx_id, 3);
+
+        assert_eq!(input.tx(), &tx_id);
+        assert_eq!(input.index(), 3);
     }
 }

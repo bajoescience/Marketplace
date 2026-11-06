@@ -130,13 +130,15 @@ pub mod tests {
                     header.vdf_diff()
                 );
 
-                result_ptr
+                let key = wr_owner.sign(&result_ptr.id());
+                (result_ptr, wr_owner.as_wr_lock(), key)
             })); 
         }
 
         for handle in handles {
-            let result_ptr = handle.join().unwrap();
+            let (result_ptr, lock, key) = handle.join().unwrap();
             jobctr.add_result(result_ptr)?;
+            jobctr.add_auth(lock, key);
         }
 
         Ok(jobctr)

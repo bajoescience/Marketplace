@@ -187,6 +187,6 @@ use super::*;
         let wrong_previous = BlockHeader::new(&previous, &BlockBody::new(Vec::new()));
 
         let err = block.validate(&wrong_previous).unwrap_err();
-        assert_eq!(err, "Error: Block header is the prev header");
+        assert_eq!(err, "Error: Block header does not match expected");
     }
 }

@@ -383,4 +383,37 @@ use crate::wallet::Wallet;
         assert!(owner.unlock(&key, &[67; 32]).is_err())
 
     }
+
+    // An owner rebuilt from keypair bytes should retain the same public key and lock identity.
+    #[test]
+    fn owner_build_from_keypair_preserves_identity() -> AgentResult<()> {
+        let owner = Owner::new_sig();
+        let keypair_bytes = owner.keypair().to_bytes();
+        let restored = Owner::build_from(&keypair_bytes)?;
+
+        assert_eq!(restored.pk(), owner.pk());
+        assert_eq!(restored.as_lock(), owner.as_lock());
+        Ok(())
+    }
+
+    // The signature and whiteroom lock forms should both accept the owner's key.
+    #[test]
+    fn owner_unlocks_both_supported_lock_forms() {
+        let owner = Owner::new_sig();
+        let message = message();
+        let key = owner.sign(&message);
+
+        assert!(owner.as_lock().unlock(&key, &message).is_ok());
+        assert!(owner.as_wr_lock().unlock(&key, &message).is_ok());
+        assert!(owner == owner.as_lock());
+        assert!(owner == owner.as_wr_lock());
+    }
+
+    // An account lock should expose the account identifier supplied at construction.
+    #[test]
+    fn account_lock_preserves_account_id() {
+        let account_id = [42u8; 32];
+
+        assert_eq!(Lock::acc(account_id), Lock::ACCOUNT(account_id));
+    }
 }

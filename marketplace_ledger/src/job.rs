@@ -106,11 +106,84 @@ impl Jobs {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
+    use marketplace_helpers::objects::{IdHash, WU, WorkSize};
+    use marketplace_helpers::objects::AgentResult;
+    use marketplace_primitives::{
+        par_exec::{Contract, ExecuteTime, JobContract, TxOptRef, WorkPtr},
+        sync_final::BlockHeader,
+    };
+    use marketplace_wallet::Owner;
 
-    // TODO: Add a contract to Jobs
-    // both Job and Tx contracts
+    use super::Jobs;
 
-    // TODO: Update Job contract with Result Pointer
+    fn job_contract(owner: &Owner, address: u8) -> JobContract {
+        let header = BlockHeader::genesis();
+        let work = WorkPtr::new(
+            [address; 32],
+            WorkSize::build(WU::try_from(10_000).unwrap()).unwrap(),
+            vec![TxOptRef::new([255; 32], 0)],
+            owner.as_wr_lock(),
+            header.id(),
+            ExecuteTime::NOW,
+        );
 
+        JobContract::new(work, header)
+    }
+
+    // Jobs should return an error when the requested work pointer is absent.
+    #[test]
+    fn missing_job_returns_an_error() {
+        let jobs = Jobs::new();
+
+        assert!(jobs.get_job(&[1; 32]).is_err());
+    }
+
+    // Adding a job should make it retrievable and allow mutable access to its contract.
+    #[test]
+    fn added_job_can_be_read_and_mutably_accessed() -> AgentResult<()> {
+        let owner = Owner::new_sig();
+        let job = job_contract(&owner, 5);
+        let id = job.id();
+        let mut jobs = Jobs::new();
+
+        jobs.add_contract(job, Vec::new());
+
+        assert_eq!(jobs.get_job(&id)?.id(), id);
+        assert_eq!(jobs.get_mut_job(&id)?.id(), id);
+        Ok(())
+    }
+
+    // A consensus-ready job should be emitted once and removed from the live job store.
+    #[test]
+    fn pending_jobs_are_drained_and_removed() -> AgentResult<()> {
+        let owner = Owner::new_sig();
+        let job = job_contract(&owner, 6);
+        let id = job.id();
+        let mut jobs = Jobs::new();
+
+        jobs.add_contract(job, Vec::new());
+        jobs.handle_consensus(id);
+
+        let pending = jobs.get_pending_jobs();
+        assert_eq!(pending.len(), 1);
+        assert!(matches!(pending[0], Contract::JOB(_)));
+        assert!(jobs.get_job(&id).is_err());
+        assert!(jobs.get_pending_jobs().is_empty());
+        Ok(())
+    }
+
+    // Taking a consensus-ready job should also clear it from the pending set.
+    #[test]
+    fn taking_ready_job_removes_it_from_pending_jobs() {
+        let owner = Owner::new_sig();
+        let job = job_contract(&owner, 7);
+        let id = job.id();
+        let mut jobs = Jobs::new();
+
+        jobs.add_contract(job, Vec::new());
+        jobs.handle_consensus(id);
+
+        assert!(jobs.take_job(&id).is_some());
+        assert!(jobs.get_pending_jobs().is_empty());
+    }
 }

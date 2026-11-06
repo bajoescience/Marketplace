@@ -92,7 +92,7 @@ impl BlockHeader {
         )
     }
 
-    // Get amount of new gdc in block
+    // Get total amount of gdc in blockchain
     pub fn total_gdc(&self) -> WU {
         self.total_gdc
     }
@@ -153,7 +153,7 @@ mod tests {
 
         assert_eq!(header.index(), previous.index() + 1);
         assert_eq!(header.prev(), previous.id());
-        assert_eq!(header.total_gdc(), body.total());
+        assert_eq!(header.total_gdc(), body.total() + previous.total_gdc());
         assert_eq!(
             header.vrf_t(),
             functions::get_vrf(body.wr_avg(), previous.vrf_t())

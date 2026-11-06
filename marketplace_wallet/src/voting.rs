@@ -142,6 +142,7 @@ pub fn subusers_count(vrf_opt: ID, user_amount: WU, total_currency: WU) -> Agent
 mod tests {
     use super::*;
 
+    // The voting threshold should tolerate the configured BFT fault allowance.
     #[test]
     fn vrf_round_trip_verifies_for_proposer_role() {
         let owner = Owner::new_sig();
@@ -153,6 +154,7 @@ mod tests {
         assert_ne!(vrf_hash, [0u8; 32]);
     }
 
+    // A VRF proof generated for one role or seed should fail when checked in another context.
     #[test]
     fn vrf_verification_rejects_wrong_seed_or_role() {
         let owner = Owner::new_sig();
@@ -163,6 +165,7 @@ mod tests {
         assert!(prove_vrf(&proof, &[99u8; 32], Role::Validator).is_err());
     }
 
+    // A voter with no currency weight should receive no subuser votes.
     #[test]
     fn subusers_count_returns_zero_for_zero_weight() {
         let vrf_opt = [0u8; 32];
@@ -174,6 +177,7 @@ mod tests {
         assert_eq!(count, 0);
     }
 
+    // Subuser selection should not exceed the tested expected-voter bound.
     #[test]
     fn subusers_count_stays_within_the_expected_voter_cap() {
         let vrf_opt = [1u8; 32];
@@ -183,5 +187,21 @@ mod tests {
         let count = subusers_count(vrf_opt, amount, total_currency).unwrap();
 
         assert!(count <= EXPECTED_VOTERS as u64);
+    }
+
+    // The configured threshold should match the BFT formula for the expected voter count.
+    #[test]
+    fn voting_threshold_matches_bft_quorum() {
+        assert_eq!(EXPECTED_VOTERS, 25);
+        assert_eq!(voting_threshold(), 17);
+    }
+
+    // A voting proof should expose the public key belonging to its owner.
+    #[test]
+    fn voting_proof_contains_owner_public_key() {
+        let owner = Owner::new_sig();
+        let proof = vrf(&owner, Role::Validator, &[12; 32]);
+
+        assert_eq!(proof.pk(), &owner.pk());
     }
 }

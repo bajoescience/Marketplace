@@ -135,3 +135,78 @@ impl WRVote for Validated {
         self.subusers as usize
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use std::collections::HashMap;
+
+    use marketplace_helpers::{functions, objects::IdHash};
+    use marketplace_wallet::Owner;
+
+    use crate::{
+        Verify,
+        par_exec::WRVote,
+        sync_final::{Block, Proposer, Validated, Validator, voter::Voter},
+    };
+
+    // A validator should retain the voter's public key and verify its proposer-seeded proof.
+    #[test]
+    fn validator_proves_voter_identity() {
+        let owner = Owner::new_sig();
+        let proposer = Proposer::new(&owner, Block::genesis());
+        let seed = proposer.block().header().prev();
+        let validator = Validator::new(&owner, &seed, &proposer);
+
+        assert_eq!(validator.pk(), owner.pk());
+        assert!(validator.verify(&seed).is_ok());
+        assert!(validator.get_vrf_opt().is_ok());
+        assert_eq!(
+            validator.owner(),
+            marketplace_wallet::Lock::SIG(functions::hash(&owner.pk()))
+        );
+    }
+
+    // A validated vote should expose the validator and its declared vote weight.
+    #[test]
+    fn validated_vote_exposes_validator_and_weight() {
+        let owner = Owner::new_sig();
+        let proposer = Proposer::new(&owner, Block::genesis());
+        let seed = proposer.block().header().prev();
+        let validator = Validator::new(&owner, &seed, &proposer);
+        let vote_id = proposer.block().header().id();
+        let validated = Validated::new(validator, 4, HashMap::new());
+
+        assert_eq!(validated.validator().pk(), owner.pk());
+        assert_eq!(validated.as_vote(), vote_id);
+        assert_eq!(validated.votes(), 4);
+    }
+
+    // A validated vote should authenticate using a key associated with its validator lock.
+    #[test]
+    fn validated_vote_verifies_with_validator_authentication() {
+        let owner = Owner::new_sig();
+        let proposer = Proposer::new(&owner, Block::genesis());
+        let seed = proposer.block().header().prev();
+        let validator = Validator::new(&owner, &seed, &proposer);
+        let validator_id = validator.id();
+        let validator_lock = validator.owner();
+        let key = owner.sign(&validator_id);
+        let mut auth = HashMap::new();
+        auth.insert(validator_lock.id(), key);
+        let validated = Validated::new(validator, 1, auth);
+
+        assert!(validated.verify().is_ok());
+    }
+
+    // A validated vote without its validator key should fail structural verification.
+    #[test]
+    fn validated_vote_requires_validator_authentication() {
+        let owner = Owner::new_sig();
+        let proposer = Proposer::new(&owner, Block::genesis());
+        let seed = proposer.block().header().prev();
+        let validator = Validator::new(&owner, &seed, &proposer);
+        let validated = Validated::new(validator, 1, HashMap::new());
+
+        assert!(validated.verify().is_err());
+    }
+}

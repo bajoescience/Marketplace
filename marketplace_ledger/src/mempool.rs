@@ -69,3 +69,45 @@ impl Mempool {
         self.validators = Whiteroom::new();
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use marketplace_primitives::sync_final::{Block, Proposer, Proposal};
+    use marketplace_wallet::Owner;
+
+    use super::Mempool;
+
+    fn proposal() -> Proposal {
+        let owner = Owner::new_sig();
+        Proposal::new(Proposer::new(&owner, Block::genesis()), Default::default())
+    }
+
+    // A new mempool should contain no proposal to finalize.
+    #[test]
+    fn new_mempool_has_no_proposal() {
+        let mut mempool = Mempool::new();
+
+        assert!(mempool.get_proposal_to_finalize().is_none());
+    }
+
+    // Adding a proposal should make it available for finalization.
+    #[test]
+    fn added_proposal_can_be_retrieved() {
+        let mut mempool = Mempool::new();
+
+        mempool.add_proposal(proposal(), 2);
+
+        assert!(mempool.get_proposal_to_finalize().is_some());
+    }
+
+    // Clearing the mempool should remove its current proposal and validator votes.
+    #[test]
+    fn clear_removes_the_current_proposal() {
+        let mut mempool = Mempool::new();
+        mempool.add_proposal(proposal(), 2);
+
+        mempool.clear();
+
+        assert!(mempool.get_proposal_to_finalize().is_none());
+    }
+}

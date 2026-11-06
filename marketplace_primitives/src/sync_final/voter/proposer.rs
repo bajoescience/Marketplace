@@ -122,3 +122,41 @@ impl Verify for Proposal {
     }
 }
 
+#[cfg(test)]
+mod tests {
+    use marketplace_wallet::Owner;
+
+    use crate::{
+        Verify,
+        sync_final::{Block, Proposer, Proposal, voter::Voter},
+    };
+
+    // A proposer should retain its block and create a verifiable proof from its previous-block seed.
+    #[test]
+    fn proposer_uses_previous_block_as_vrf_seed() {
+        let owner = Owner::new_sig();
+        let block = Block::genesis();
+        let expected_id = block.id();
+        let seed = block.header().prev();
+        let proposer = Proposer::new(&owner, block);
+
+        assert_eq!(proposer.block().id(), expected_id);
+        assert_eq!(proposer.pk(), owner.pk());
+        assert!(proposer.verify(&seed).is_ok());
+        assert!(proposer.get_vrf_opt().is_ok());
+        assert!(Verify::verify(&proposer).is_ok());
+    }
+
+    // A proposal should expose the block contained by its proposer.
+    #[test]
+    fn proposal_exposes_proposed_block() {
+        let owner = Owner::new_sig();
+        let block = Block::genesis();
+        let expected_id = block.id();
+        let proposer = Proposer::new(&owner, block);
+        let proposal = Proposal::new(proposer, Default::default());
+
+        assert_eq!(proposal.block().id(), expected_id);
+        assert_eq!(proposal.proposer().block().id(), expected_id);
+    }
+}

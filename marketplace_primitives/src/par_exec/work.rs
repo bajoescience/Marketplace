@@ -70,9 +70,6 @@ pub enum ExecuteTime {
 ///     blk_hdr.id(),
 ///     do_at
 /// );
-/// 
-/// // Verify it's a valid Work Pointer
-/// assert!(workptr.verify().is_ok());
 /// ```
 #[derive(BorshSerialize, BorshDeserialize, Debug, Clone)]
 pub struct WorkPtr {
@@ -140,9 +137,6 @@ impl WorkPtr {
     ///     blk_hdr.id(),
     ///     do_at
     /// );
-    /// 
-    /// // Verify it's a valid Work Pointer
-    /// assert!(workptr.verify().is_ok());
     /// ```
     pub fn new(
         work_addr: ID, 

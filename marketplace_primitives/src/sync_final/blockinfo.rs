@@ -61,3 +61,42 @@ impl BlockInfo {
         &self.auth
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use marketplace_helpers::functions;
+    use marketplace_wallet::voting::EXPECTED_VOTERS;
+
+    use crate::{
+        par_exec::Whiteroom,
+        sync_final::{Block, Validated, blockinfo::BlockInfo},
+    };
+
+    const MAX: usize = functions::max_wr_size_from_expected(EXPECTED_VOTERS);
+
+    // Block information should preserve its block and authenticator through serialization.
+    #[test]
+    fn block_info_serialization_round_trip() -> Result<(), std::io::Error> {
+        let block = Block::genesis();
+        let info = BlockInfo::new(block.clone(), Whiteroom::<Validated, MAX>::new());
+
+        assert_eq!(info.block().id(), block.id());
+        assert_eq!(info.auth().len(), 0);
+
+        let restored = BlockInfo::from(&info.serialize())?;
+        assert_eq!(restored.block().id(), block.id());
+        assert_eq!(restored.auth().len(), 0);
+        Ok(())
+    }
+
+    // Destroying block information should return its owned block and authenticator.
+    #[test]
+    fn destroy_returns_block_and_authenticator() {
+        let block = Block::genesis();
+        let info = BlockInfo::new(block.clone(), Whiteroom::<Validated, MAX>::new());
+        let (restored_block, auth) = info.destroy();
+
+        assert_eq!(restored_block.id(), block.id());
+        assert_eq!(auth.len(), 0);
+    }
+}

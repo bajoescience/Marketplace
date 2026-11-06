@@ -240,10 +240,110 @@ impl<B: Balances> State<B> {
 
 #[cfg(test)]
 mod tests {
+    use std::collections::HashMap;
 
-use super::*;
+    use marketplace_helpers::objects::{IdHash, WU};
+    use marketplace_primitives::par_exec::{Tx, TxIdentifier, TxOpt, TxOptRef};
+    use marketplace_wallet::Owner;
 
-    // Test addition and subtraction to State 
+    use super::*;
 
-    // Test reverting of nodes
+    // DefaultBalances should store, retrieve, remove, and sum UTXOs for an owner.
+    #[test]
+    fn default_balances_store_and_remove_utxos() {
+        let owner = Owner::new_sig();
+        let lock = owner.as_lock();
+        let reference = TxOptRef::new([1; 32], 0);
+        let amount = WU::try_from(17_000).unwrap();
+        let output = TxOpt::new(lock, amount);
+        let mut balances = DefaultBalances::new();
+
+        balances.put(reference, output);
+        assert_eq!(balances.len(), 1);
+        assert_eq!(balances.balance(lock), amount);
+        assert_eq!(balances.get(reference), Some(output));
+        assert_eq!(balances.len(), 0);
+        assert_eq!(balances.balance(lock), WU::default());
+    }
+
+    // State should place transaction outputs in the coin balance sheet by output index.
+    #[test]
+    fn putting_transaction_outputs_updates_coin_balance() {
+        let owner = Owner::new_sig();
+        let lock = owner.as_lock();
+        let amount = WU::try_from(23_000).unwrap();
+        let tx = Tx::new(
+            1,
+            TxIdentifier::COIN,
+            None,
+            Some(vec![TxOpt::new(lock, amount)]),
+        );
+        let mut state = State::<DefaultBalances>::new();
+
+        state.put_opts(&tx);
+
+        assert_eq!(state.get_gdc_balance(lock), amount);
+        let reference = TxOptRef::new(tx.id(), 0);
+        assert_eq!(
+            state.get_mut_coin_balance_list().get(reference),
+            Some(TxOpt::new(lock, amount))
+        );
+    }
+
+    // UTXO confirmation should accept the owner's signature over the spending transaction ID.
+    #[test]
+    fn confirms_utxo_with_owner_signature() {
+        let owner = Owner::new_sig();
+        let output = TxOpt::new(owner.as_lock(), WU::GDC());
+        let message_id = [8; 32];
+        let mut auth = HashMap::new();
+        auth.insert(owner.as_lock().id(), owner.sign(&message_id));
+
+        assert!(confirm_utxo(&output, &message_id, &auth).is_ok());
+    }
+
+    // UTXO confirmation should reject an output whose owner has no authentication entry.
+    #[test]
+    fn rejects_utxo_without_owner_signature() {
+        let owner = Owner::new_sig();
+        let output = TxOpt::new(owner.as_lock(), WU::GDC());
+
+        assert!(confirm_utxo(&output, &[8; 32], &HashMap::new()).is_err());
+    }
+
+    // Removing transaction inputs should preserve enough data to restore them after a failure.
+    #[test]
+    fn get_and_revert_transaction_inputs_restores_utxos() -> AgentResult<()> {
+        let owner = Owner::new_sig();
+        let lock = owner.as_lock();
+        let reference = TxOptRef::new([3; 32], 0);
+        let output = TxOpt::new(lock, WU::try_from(12_000).unwrap());
+        let tx = Tx::new(
+            1,
+            TxIdentifier::COIN,
+            Some(vec![reference]),
+            Some(vec![TxOpt::new(lock, output.amount())]),
+        );
+        let mut state = State::<DefaultBalances>::new();
+        state.get_mut_coin_balance_list().put(reference, output);
+        let mut auth = HashMap::new();
+        auth.insert(lock.id(), owner.sign(&tx.id()));
+
+        let removed = state.get_ref_opts(&tx, &tx.id(), &auth)?;
+        assert_eq!(removed.len(), 1);
+        assert_eq!(state.get_gdc_balance(lock), WU::default());
+
+        state.revert_ref_opts(&tx, removed);
+        assert_eq!(state.get_gdc_balance(lock), output.amount());
+        Ok(())
+    }
+
+    // A token balance query should distinguish an unknown currency from an empty balance.
+    #[test]
+    fn unknown_token_balance_returns_an_error() {
+        let owner = Owner::new_sig();
+        let state = State::<DefaultBalances>::new();
+
+        assert!(state.get_token_balance([4; 32], owner.as_lock()).is_err());
+    }
 }

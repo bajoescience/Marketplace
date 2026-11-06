@@ -274,6 +274,75 @@ mod tests {
         assert_eq!(fee_price(money), fee)
     }
 
+    // BFT helper conversions should preserve the configured quorum relationships.
+    #[test]
+    fn bft_size_helpers_round_trip_threshold() {
+        let expected = 4;
+        let threshold = bft_thresh(expected);
+
+        assert_eq!(threshold, 3);
+        assert_eq!(bft_expected_from_thresh(threshold), expected);
+        assert_eq!(bft_from(1), expected);
+        assert_eq!(expected_wr_from_max(max_wr_size_from_expected(expected)), expected);
+        assert_eq!(bft_thresh_from_max_wr_size(max_wr_size_from_expected(expected)), 7);
+    }
+
+    // Averaging work units should return their arithmetic mean and stay at least one unit.
+    #[test]
+    fn average_work_units_handles_regular_and_zero_values() {
+        assert_eq!(
+            avg_wu(WU::try_from(4).unwrap(), WU::try_from(8).unwrap()).inner(),
+            6
+        );
+        assert_eq!(avg_wu(WU::default(), WU::default()), WU::single());
+    }
+
+    // Hashing and combining seed components should produce stable 32-byte identifiers.
+    #[test]
+    fn hash_and_seed_are_deterministic() {
+        let first = hash(b"marketplace");
+        let second = hash(b"marketplace");
+
+        assert_eq!(first, second);
+        assert_eq!(first.len(), 32);
+        assert_eq!(seed(b"work", b"owner"), seed(b"work", b"owner"));
+        assert_ne!(seed(b"work", b"owner"), seed(b"owner", b"work"));
+        assert_eq!(wr_seed(b"work", b"owner"), seed(b"work", b"owner"));
+    }
+
+    // Address generation should append a checksum derived from the raw 32-byte address.
+    #[test]
+    fn generated_address_appends_hash_checksum() {
+        let raw_address = [23u8; 32];
+        let address = generate_address_and_checksum(&raw_address);
+        let expected_checksum = hash(&raw_address);
+
+        assert_eq!(address.len(), 36);
+        assert_eq!(&address[..32], &raw_address);
+        assert_eq!(&address[32..], &expected_checksum[..4]);
+    }
+
+    // Byte conversion should reject malformed hex and decode valid fixed-width IDs.
+    #[test]
+    fn byte_conversion_rejects_invalid_hex() {
+        assert!(to_bytes("not-hex").is_err());
+        assert!(to_bytes("00").is_err());
+        assert_eq!(from_bytes(&dum_bytes()).len(), 64);
+    }
+
+    // Hash constants should stay in the normalized interval used by sortition.
+    #[test]
+    fn hash_constant_is_normalized() {
+        assert_eq!(hashconstant([0; 32]), 0.0);
+        assert!(hashconstant([255; 32]) <= 1.0);
+    }
+
+    // Timestamp generation should return a usable nonnegative Unix timestamp.
+    #[test]
+    fn timestamp_returns_unix_seconds() {
+        assert!(timestamp() > 0);
+    }
+
     // TODO: test that hash constant function should always produce the same f64 value
     // without any bit problems suitable for a decentralized platform
 }
