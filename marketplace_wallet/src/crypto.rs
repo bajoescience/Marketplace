@@ -134,7 +134,7 @@ impl<'a> Crypto<'a> {
 
         let trsc = ctx.bytes(vdf_opt);
 
-        // generate proof
+        // Generate proof
         let (io, proof, _) = self.keypair()
             .vrf_sign(trsc);
 
@@ -142,7 +142,7 @@ impl<'a> Crypto<'a> {
             vdf_opt: vdf_opt.to_vec(),
             vrf_pre_opt: io.to_preout().to_bytes(),
             vrf_proof: proof.to_bytes(),
-            pk_bytes: self.keypair().public.to_bytes(),
+            pk_bytes: self.owner.pk(),
         })
     }
 

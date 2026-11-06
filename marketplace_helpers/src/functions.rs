@@ -3,33 +3,51 @@ use std::{todo};
 use sha3::{Digest, Sha3_256};
 use time::OffsetDateTime;
 
-use crate::objects::{ID, MIN_WORK_SIZE, VDF_CONSTANT, VRF_T, WHITEROOM_SIZE, WU};
+use crate::objects::{CONTRACT_WHITEROOM_SIZE, ID, MIN_WORK_SIZE, VDF_CONSTANT, VRF_T, WU};
 use alloy_primitives::{U256, U512};
+use rug::{Rational};
 
 /// BFT whiteroom size given f amounts of tolerable faulty nodes
-pub fn bft_from(f: usize) -> usize {
+pub const fn bft_from(f: usize) -> usize {
     (3 * f) + 1
 }
 
-/// BFT tolerable number of non-faulty nodes given a whiteroom size m
-pub fn bft_thresh(m: usize) -> usize {
-    let f = (m - 1) / 3;
+/// BFT tolerable number of non-faulty nodes given an
+/// expected whiteroom size of exp
+pub const fn bft_thresh(exp: usize) -> usize {
+    let f = (exp - 1) / 3;
 
     (2 * f) + 1
 }
 
-/// BFT threshold of Expected Whiteroom Size
-pub const fn whiteroom_threshold() -> usize {
-    let f = (WHITEROOM_SIZE - 1) / 3;
+/// BFT expected whiteroom size given a certain threshold
+pub const fn bft_expected_from_thresh(thresh: usize) -> usize {
+    // Get number of tolearble faulty nodes
+    let f = (thresh - 1) / 2;
 
-    (2 * f) + 1
+    bft_from(f)
 }
 
 /// Maximum whiteroom size given by 
 /// formula in the marketplace whitepaper.
-pub const fn whiteroom_max_size() -> usize {
-    // Get whiteroom threshold size "s"
-    let s = whiteroom_threshold();
+/// from an expected number of nodes
+pub const fn max_wr_size_from_expected(exp: usize) -> usize {
+    let threshold = bft_thresh(exp);
+
+    (2 * threshold) - 1
+}
+
+/// Expected whiteroom size from  a maximum 
+/// whiteroom size max
+pub const fn expected_wr_from_max(max: usize) -> usize {
+    let thresh = (max + 1) / 2;
+
+    bft_expected_from_thresh(thresh)
+}
+
+pub const fn bft_thresh_from_max_wr_size(max: usize) -> usize {
+    // Get expected whiteroom size "s" from max
+    let s = expected_wr_from_max(max);
 
     // Return max size (see whitepaper)
     (2 * s) - 1
@@ -47,7 +65,7 @@ pub fn vdf_difficulty(work_size: WU, vrf_threshold: VRF_T) -> u64 {
     let vrf_t = U256::from_be_bytes(vrf_threshold);
 
     // Invested Power (see whitepaper Page 5)
-    let ip = work_size / WHITEROOM_SIZE as u128;
+    let ip = work_size / CONTRACT_WHITEROOM_SIZE as u128;
 
     // Multiply VRF threshold by Invested power, then divide by 
     // max 256 bit number and get final VDF difficulty in u64
@@ -93,7 +111,7 @@ pub fn get_vrf(wr_avg_size: usize, prev_vrf: VRF_T) -> VRF_T {
     let whiteroom_avg_size = U256::from(wr_avg_size);
 
     // Expected Whiteroom size in 256 bit integer form.
-    let expected_wr_size = U256::from(WHITEROOM_SIZE);
+    let expected_wr_size = U256::from(CONTRACT_WHITEROOM_SIZE);
 
     ((vrf / whiteroom_avg_size).saturating_mul(expected_wr_size)).to_be_bytes()
 }
@@ -128,10 +146,15 @@ pub fn casual_fee_price(amount: WU) -> WU {
 }
 
 // Get a Whiteroom seed using hash of work_ptr_id and pub key
-pub fn wr_seed(work_ptr_id: &ID, pk: &[u8]) -> ID {
+pub fn wr_seed(work_ptr_id: &[u8], pk: &[u8]) -> ID {
+    seed(work_ptr_id, pk)
+}
+
+// Get any seed by hashing two inputs
+pub fn seed(ipt_0: &[u8], ipt_1: &[u8]) -> ID {
     let mut hasher = Sha3_256::new();
-    hasher.update(pk);
-    hasher.update(work_ptr_id);
+    hasher.update(ipt_0);
+    hasher.update(ipt_1);
 
     hasher.finalize().into()
 }
@@ -164,6 +187,26 @@ pub fn timestamp() -> u64 {
     OffsetDateTime::now_utc().unix_timestamp() as u64
 }
 
+/// Probability of voters chosen 
+/// is given by  p = expected_users / total_currency
+pub fn voter_probability(users: u128, total_currency: WU) -> f64 {
+    let rational = Rational::from(users / total_currency.inner());
+
+    rational.to_f64()
+}
+
+/// Hash constant given by 
+/// 
+/// c = hash / 2 ^ 256
+/// where 256 bits is the hash length.
+pub fn hashconstant(hash: ID) -> f64 {
+    let hash = U256::from_be_bytes(hash);
+
+    let value = (hash >> 203usize).to::<u64>();
+
+    value as f64 / ((1u64 << 53) - 1) as f64
+}
+
 
 #[cfg(test)]
 mod tests {
@@ -180,7 +223,7 @@ mod tests {
         let old_vrf = [255u8; 32];
 
         // Average whiteroom size of last epoch
-        let avg_wr_size = whiteroom_max_size();
+        let avg_wr_size = max_wr_size_from_expected(CONTRACT_WHITEROOM_SIZE);
 
         let new_vrf = get_vrf(avg_wr_size, old_vrf);
 
@@ -194,7 +237,7 @@ mod tests {
         let old_vrf = [255u8; 32];
 
         // Average whiteroom size of last epoch
-        let avg_wr_size = whiteroom_threshold();
+        let avg_wr_size = bft_thresh(CONTRACT_WHITEROOM_SIZE);
 
         let new_vrf = get_vrf(avg_wr_size, old_vrf);
 
@@ -230,4 +273,76 @@ mod tests {
 
         assert_eq!(fee_price(money), fee)
     }
+
+    // BFT helper conversions should preserve the configured quorum relationships.
+    #[test]
+    fn bft_size_helpers_round_trip_threshold() {
+        let expected = 4;
+        let threshold = bft_thresh(expected);
+
+        assert_eq!(threshold, 3);
+        assert_eq!(bft_expected_from_thresh(threshold), expected);
+        assert_eq!(bft_from(1), expected);
+        assert_eq!(expected_wr_from_max(max_wr_size_from_expected(expected)), expected);
+        assert_eq!(bft_thresh_from_max_wr_size(max_wr_size_from_expected(expected)), 7);
+    }
+
+    // Averaging work units should return their arithmetic mean and stay at least one unit.
+    #[test]
+    fn average_work_units_handles_regular_and_zero_values() {
+        assert_eq!(
+            avg_wu(WU::try_from(4).unwrap(), WU::try_from(8).unwrap()).inner(),
+            6
+        );
+        assert_eq!(avg_wu(WU::default(), WU::default()), WU::single());
+    }
+
+    // Hashing and combining seed components should produce stable 32-byte identifiers.
+    #[test]
+    fn hash_and_seed_are_deterministic() {
+        let first = hash(b"marketplace");
+        let second = hash(b"marketplace");
+
+        assert_eq!(first, second);
+        assert_eq!(first.len(), 32);
+        assert_eq!(seed(b"work", b"owner"), seed(b"work", b"owner"));
+        assert_ne!(seed(b"work", b"owner"), seed(b"owner", b"work"));
+        assert_eq!(wr_seed(b"work", b"owner"), seed(b"work", b"owner"));
+    }
+
+    // Address generation should append a checksum derived from the raw 32-byte address.
+    #[test]
+    fn generated_address_appends_hash_checksum() {
+        let raw_address = [23u8; 32];
+        let address = generate_address_and_checksum(&raw_address);
+        let expected_checksum = hash(&raw_address);
+
+        assert_eq!(address.len(), 36);
+        assert_eq!(&address[..32], &raw_address);
+        assert_eq!(&address[32..], &expected_checksum[..4]);
+    }
+
+    // Byte conversion should reject malformed hex and decode valid fixed-width IDs.
+    #[test]
+    fn byte_conversion_rejects_invalid_hex() {
+        assert!(to_bytes("not-hex").is_err());
+        assert!(to_bytes("00").is_err());
+        assert_eq!(from_bytes(&dum_bytes()).len(), 64);
+    }
+
+    // Hash constants should stay in the normalized interval used by sortition.
+    #[test]
+    fn hash_constant_is_normalized() {
+        assert_eq!(hashconstant([0; 32]), 0.0);
+        assert!(hashconstant([255; 32]) <= 1.0);
+    }
+
+    // Timestamp generation should return a usable nonnegative Unix timestamp.
+    #[test]
+    fn timestamp_returns_unix_seconds() {
+        assert!(timestamp() > 0);
+    }
+
+    // TODO: test that hash constant function should always produce the same f64 value
+    // without any bit problems suitable for a decentralized platform
 }

@@ -1,13 +1,14 @@
 pub mod job;
 pub mod tx;
 
-use crate::Verify;
-
 pub use self::job::JobContract;
 pub use self::tx::TxContract;
 
 use borsh::{BorshDeserialize, BorshSerialize};
-use marketplace_helpers::objects::{AgentResult, ID, IdHash, WU};
+
+use crate::{
+    Verify, helpers::objects::{AgentResult, ID, WU}, par_exec::TxOpt,
+};
 
 // Contract type for a job
 #[derive(BorshSerialize, BorshDeserialize, Debug, Clone)]
@@ -17,17 +18,6 @@ pub enum Contract {
 }
 
 impl Contract {
-    // pub fn as_tx(&self) -> impl IntoIterator<Item = Tx> {
-    //     match self {
-    //         Self::JOB(jobctr) => {
-    //             jobctr.get_tx()
-    //         },
-    //         Self::TX(txctr) => {
-    //             txctr.owned_tx()
-    //         }
-    //     }
-    // }
-
     // Genesis Contract
     pub fn genesis() -> Self {
         Self::TX(TxContract::genesis())
@@ -37,17 +27,50 @@ impl Contract {
     pub fn new_coins(&self) -> WU {
         if let Self::JOB(jobctr) = self {
             jobctr.new_gdc()
-        }else {
+        } else {
             WU::default()
         }
     }
+}
 
-    pub fn ctr_id(&self) -> ID {
+// Getter methods
+impl Contract {
+    pub fn id(&self) -> ID {
         match self {
-            Self::JOB(jobctr) => jobctr.work_id(),
+            Self::JOB(jobctr) => jobctr.id(),
             Self::TX(txctr) => txctr.id()
         }
     }
+
+    /// Contract utxo outputs
+    pub fn opts(&self) -> Vec<TxOpt> {
+        match self {
+            Self::JOB(jobctr) => {
+                jobctr.get_tx().unwrap()
+                    .opts()
+                    .into_iter()
+                    .map(|opt| *opt)
+                    .collect()
+            },
+            Self::TX(txctr) => {
+                txctr.get_txs()
+                    .iter()
+                    .map(|tx| tx.opts().iter())
+                    .flatten()
+                    .map(|opt| *opt)
+                    .collect()
+            }
+        }
+    }
+}
+
+impl PartialEq for Contract {
+    fn eq(&self, other: &Self) -> bool {
+        self.id() == other.id()
+    }
+}
+
+impl Eq for Contract {
 }
 
 impl Verify for Contract {
@@ -62,12 +85,22 @@ impl Verify for Contract {
 // Tests here
 #[cfg(test)]
 pub mod tests {
-    use std::{assert_eq, thread};
+    use std::thread;
 
-use marketplace_helpers::objects::{AgentResult, WHITEROOM_SIZE};
-    use marketplace_wallet::Owner;
-    use crate::{BlockHeader, Tx, TxIO, TxIdentifier, par_exec::contract::job::tests::{resultptr, workptr}};
-    use super::*;
+    use marketplace_helpers::functions;
+
+use crate::{
+        helpers::objects::{AgentResult, CONTRACT_WHITEROOM_SIZE, IdHash, WU},
+        par_exec::{
+            Bill, Tx, TxIdentifier, TxOpt, TxOptRef,
+            contract::job::tests::{resultptr, workptr},
+        },
+        sync_final::BlockHeader,
+        wallet::Owner,
+        Verify,
+    };
+
+    use super::{Contract, JobContract, TxContract};
 
     // Test Job contract
     pub fn jobctr() -> AgentResult<JobContract>  {
@@ -78,7 +111,8 @@ use marketplace_helpers::objects::{AgentResult, WHITEROOM_SIZE};
 
         // Input
         let workptr = workptr(&ipt_owner, blk_hdr.id());
-        let mut jobctr = JobContract::new(workptr, blk_hdr);
+        let vdf_diff = functions::vdf_difficulty(workptr.work_size().into(), blk_hdr.vrf_t());
+        let mut jobctr = JobContract::new(workptr, blk_hdr.clone());
         
         // ResultPtr Initializers
         let work_id = jobctr.input().id();
@@ -86,7 +120,7 @@ use marketplace_helpers::objects::{AgentResult, WHITEROOM_SIZE};
         let mut handles = Vec::new();
 
         // Assemble Whiteroom max results
-        for _ in 0..WHITEROOM_SIZE {
+        for _ in 0..CONTRACT_WHITEROOM_SIZE {
             handles.push(thread::spawn(move || {
                 let wr_owner = Owner::new_sig();
 
@@ -94,16 +128,18 @@ use marketplace_helpers::objects::{AgentResult, WHITEROOM_SIZE};
                 let result_ptr = resultptr(
                     work_id,
                     &wr_owner,
-                    blk_hdr.vdf_diff()
+                    vdf_diff
                 );
 
-                result_ptr
+                let key = wr_owner.sign(&result_ptr.id());
+                (result_ptr, wr_owner.as_wr_lock(), key)
             })); 
         }
 
         for handle in handles {
-            let result_ptr = handle.join().unwrap();
+            let (result_ptr, lock, key) = handle.join().unwrap();
             jobctr.add_result(result_ptr)?;
+            jobctr.add_auth(lock, key);
         }
 
         Ok(jobctr)
@@ -121,11 +157,11 @@ use marketplace_helpers::objects::{AgentResult, WHITEROOM_SIZE};
     #[test]
     fn verify_jobctr_id() -> AgentResult<()> {
         let jobctr = jobctr()?;
-        let id = jobctr.work_id();
+        let id = jobctr.id();
 
         let ctr = Contract::JOB(jobctr);
 
-        assert_eq!(ctr.ctr_id(), id);
+        assert_eq!(ctr.id(), id);
         Ok(())
     }
 
@@ -134,19 +170,21 @@ use marketplace_helpers::objects::{AgentResult, WHITEROOM_SIZE};
         let owner = Owner::new_sig();
 
         let ipts = vec![
-            TxIO::new(owner.as_lock(), WU::try_from(20000).unwrap())
+            TxOptRef::new([255; 32], 0)
         ];
 
         let opts = Some(vec![
-            TxIO::new(owner.as_lock(), WU::try_from(20000).unwrap())
+            TxOpt::new(owner.as_lock(), WU::try_from(20000).unwrap())
         ]);
         
         let tx = Tx::new(0, TxIdentifier::COIN, Some(ipts), opts);
 
-        let mut txctr = TxContract::new(vec![tx]);
-        let key = owner.sign(&txctr.id());
+        let bill = Bill::new(vec![tx]);
+        let key = owner.sign(&bill.id());
 
-        txctr.add_auth(owner.as_lock(), key, false)?;
+        let mut txctr = TxContract::new(bill);
+
+        txctr.add_auth(owner.as_lock(), key);
 
         Ok(txctr)
     }
@@ -156,5 +194,40 @@ use marketplace_helpers::objects::{AgentResult, WHITEROOM_SIZE};
     fn verify_txctr() -> AgentResult<()> {
         let ctr = Contract::TX(txctr()?);
         ctr.verify()
+    }
+
+    // Genesis should create a transaction contract containing the initial ledgers.
+    #[test]
+    fn genesis_contract_contains_initial_transactions() {
+        let contract = Contract::genesis();
+
+        let tx_contract = match contract {
+            Contract::TX(tx_contract) => tx_contract,
+            Contract::JOB(_) => panic!("Genesis contract must be a transaction contract"),
+        };
+
+        assert_eq!(tx_contract.get_txs().len(), 2);
+        assert!(tx_contract.get_txs()[0].is_coin());
+        assert!(!tx_contract.get_txs()[1].is_coin());
+    }
+
+    // Contract identifiers should delegate to the wrapped contract type.
+    #[test]
+    fn contract_identifier_delegates_to_inner_contract() -> AgentResult<()> {
+        let tx_contract = txctr()?;
+        let expected_id = tx_contract.id();
+        let contract = Contract::TX(tx_contract);
+
+        assert_eq!(contract.id(), expected_id);
+        Ok(())
+    }
+
+    // Transaction contracts do not create newly issued goldcoin.
+    #[test]
+    fn transaction_contract_has_no_new_coins() -> AgentResult<()> {
+        let contract = Contract::TX(txctr()?);
+
+        assert_eq!(contract.new_coins(), WU::default());
+        Ok(())
     }
 }

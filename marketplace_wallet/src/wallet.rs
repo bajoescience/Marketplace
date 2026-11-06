@@ -129,6 +129,7 @@ use super::*;
         [67u8; 32]
     }
 
+    // Signing a message with a wallet should produce a signature verifiable by its public key.
     #[test]
     fn sign_using_wallet() -> Result<(), Box<dyn Error + 'static>> {
         let wallet = Wallet::new();
@@ -147,5 +148,28 @@ use super::*;
         assert!(verifying_key.verify(ctx.bytes(&message()), &sig).is_ok());
 
         Ok(())
+    }
+
+    // Rebuilding a wallet from its serialized keypair should preserve its public identity.
+    #[test]
+    fn build_from_keypair_preserves_public_key() -> AgentResult<()> {
+        let wallet = Wallet::new();
+        let keypair_bytes = wallet.keypair().to_bytes();
+
+        let restored = Wallet::build_from(&keypair_bytes)?;
+
+        assert_eq!(restored.pubkey_bytes(), wallet.pubkey_bytes());
+        assert_eq!(restored.hash(), wallet.hash());
+        Ok(())
+    }
+
+    // Wallet addresses should contain the public-key hash followed by a four-byte checksum.
+    #[test]
+    fn address_contains_hash_and_checksum() {
+        let wallet = Wallet::new();
+        let address = wallet.address();
+
+        assert_eq!(address.len(), 36);
+        assert_eq!(&address[..32], &wallet.hash());
     }
 }

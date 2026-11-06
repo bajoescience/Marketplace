@@ -13,3 +13,4 @@ borsh = {version = "1.6.1", features = ["derive"]}
 vdf-rs = "0.2.0"
 schnorrkel = "0.11.5"
 sha2 = "0.11"
+statrs = "0.19.1"

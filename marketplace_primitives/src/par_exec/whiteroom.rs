@@ -2,42 +2,76 @@ use std::{collections::{HashMap}, format};
 
 use arrayvec::ArrayVec;
 use borsh::{BorshDeserialize, BorshSerialize};
-use marketplace_helpers::{functions::{self, whiteroom_max_size}, objects::{AgentResult, ID, WHITEROOM_SIZE}};
-
-const WHITEROOM_MAX: usize = whiteroom_max_size();
+use marketplace_helpers::{functions, objects::{AgentResult, ID}};
 
 // Consensus trait to prove what it means 
 // for a whiteroom to agree
 pub trait WRVote: PartialEq {
     fn as_vote(&self) -> ID;
+
+    // Number of votes self owns
+    fn votes(&self) -> usize;
 }
 
 #[derive(BorshSerialize, BorshDeserialize, Debug, Clone)]
-pub struct Whiteroom<T: WRVote> {
-    list: ArrayVec<T, WHITEROOM_MAX>,
+pub struct Whiteroom<T, const MAX: usize>
+where 
+    T: WRVote + BorshSerialize + BorshDeserialize
+{
+    list: ArrayVec<T, MAX>,
+
+    // A voter may weigh more than one votes, so that has to be taken into account
     votes: HashMap<ID, usize>,
+
+    // Expected Whiteroom size (usually 25)
+    expected: usize,
 }
 
-impl<T> Whiteroom<T>
-where
-    T: WRVote 
+impl<T, const MAX: usize> Whiteroom<T, MAX>
+where 
+    T: WRVote + BorshSerialize + BorshDeserialize
 {
-    pub fn new() -> Whiteroom<T> {
+    /// Initialize 
+    pub fn new() -> Whiteroom<T, MAX> {
         Self {
             list: ArrayVec::new(),
+
+            // Each
             votes: HashMap::new(),
+            expected: functions::expected_wr_from_max(MAX),
         }
+    }
+
+    /// Create an instance from bytes
+    pub fn from(bytes: &[u8]) -> Result<Self, std::io::Error> {
+        borsh::from_slice(bytes)
+    }
+
+    /// Serialize whiteroom
+    pub fn serialize(&self) -> Vec<u8> {
+        borsh::to_vec(&self)
+            .expect("Illegal: Error Serializing Whiteroom")
     }
 }
 
 // Getter methods
-impl<T> Whiteroom<T>
-where
-    T: WRVote 
+impl<T, const MAX: usize> Whiteroom<T, MAX>
+where 
+    T: WRVote + BorshSerialize + BorshDeserialize
 {
+    /// Check if whiteroom is full
+    /// by amount of votes, not amount of individual whiteroom members
+    /// 
+    /// This means if the members contribute varying amount of votes, the whiteroom can 
+    /// be full before it reaches maximum voter capacity
+    /// 
+    /// Although once capacity is reached, then the whiteroom is always full
+    pub fn is_full(&self) -> bool {
+        self.list.is_full() || (self.len() >= self.list.capacity())
+    }
     // Whiteroom member count
     pub fn len(&self) -> usize {
-        self.list.len()
+        self.members().map(|voter| voter.votes()).sum()
     }
 
     // Whiteroom members
@@ -47,8 +81,7 @@ where
 
     // Gwt winning members
     pub fn winners(&self) -> impl Iterator<Item = &T> {
-        self.list
-            .iter()
+        self.members()
             .filter(
                 |member| {
                     if let Some(winning_vote) = self.winning_vote() {
@@ -62,9 +95,12 @@ where
 
     // Checks if current members have reached consensus
     pub fn is_consensus(&self) -> bool {
+        // Expected whiteroom size 
+        let exp_size = self.expected;
+
         // Check if winning vote has greater count than threshold
         if let Some(winner) = self.winning_vote() {
-            if *winner.1 >= functions::whiteroom_threshold() {
+            if *winner.1 >= functions::bft_thresh(exp_size) {
                 return true;
             }
         }
@@ -72,11 +108,18 @@ where
         false
     }
 
-    // Check if consensus is still possible
+    /// Check if consensus is still possible
+    /// 
+    /// returns true if possible
+    /// 
+    /// and false if not possible
     pub fn can_consensus(&self) -> bool {
         // Whiteroom can only reach consensus when less than 2
-        // results reach effective threshold
-        let effective_thresh = WHITEROOM_SIZE - functions::whiteroom_threshold();
+        // results reach effective threshold which is 1 / 3
+        // of nodes
+        let exp_size = self.expected;
+
+        let effective_thresh = exp_size - functions::bft_thresh(exp_size);
 
         let count = self.votes
             .iter()
@@ -100,11 +143,10 @@ where
 }
 
 // Setter methods
-impl<T> Whiteroom<T>
-where
-    T: WRVote 
+impl<T, const MAX: usize> Whiteroom<T, MAX>
+where 
+    T: WRVote + BorshSerialize + BorshDeserialize
 {
-
     // Add a new whiteroom member
     pub fn add_member(&mut self, member: T) -> AgentResult<usize> {
         if self.list.is_full() {
@@ -114,7 +156,7 @@ where
         }
 
         // Increase whiteroom member vote's count
-        *self.votes.entry(member.as_vote()).or_insert(0) += 1;
+        *self.votes.entry(member.as_vote()).or_insert(0) += member.votes();
 
         // Ensure no duplicates
         if self.list.contains(&member) {
@@ -133,14 +175,21 @@ mod tests {
     use std::assert_eq;
 
 use super::*;
+use marketplace_helpers::{objects::{CONTRACT_WHITEROOM_SIZE}};
 
-    #[derive(PartialEq)]
+    const MAX: usize = functions::max_wr_size_from_expected(CONTRACT_WHITEROOM_SIZE);
+
+    #[derive(PartialEq, BorshDeserialize, BorshSerialize)]
     // (number, vote)
     pub struct TestMember(u8, ID);
 
     impl WRVote for TestMember {
         fn as_vote(&self) -> ID {
             self.1
+        }
+
+        fn votes(&self) -> usize {
+            1
         }
     }
 
@@ -152,7 +201,7 @@ use super::*;
             functions::dum_bytes()
         );
 
-        let mut whiteroom = Whiteroom::new();
+        let mut whiteroom = Whiteroom::<_, MAX>::new();
 
         whiteroom.add_member(member)?;
 
@@ -174,7 +223,7 @@ use super::*;
             functions::dum_bytes()
         );
 
-        let mut whiteroom = Whiteroom::new();
+        let mut whiteroom = Whiteroom::<_, MAX>::new();
 
         whiteroom.add_member(member0)?;
 
@@ -187,7 +236,7 @@ use super::*;
     // Test whiteroom consensus should work
     #[test]
     fn is_consensus_whiteroom() -> AgentResult<()> {
-        let mut wr = Whiteroom::new();
+        let mut wr = Whiteroom::<_, MAX>::new();
 
         
         // Create 2 members
@@ -214,7 +263,7 @@ use super::*;
     // Test whiteroom non-consensus should fail
     #[test]
     fn is_non_consensus_whiteroom() -> AgentResult<()> {
-        let mut wr = Whiteroom::new();
+        let mut wr = Whiteroom::<_, MAX>::new();
 
         // Testing 3(1) + 1 members
         // We create 2 agreeing members

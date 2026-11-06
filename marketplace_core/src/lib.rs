@@ -1,7 +1,7 @@
 //! # Marketplace Core
 //! 
 //! `marketplace core` is the root package of the Marketplace project. This package initializes the `Core` data structure 
-//! which manages the state of a marketplace node comprising of the following States.
+//! which manages the state of a marketplace node comprising of the following.
 //! 
 //! ## Live State
 //! 
@@ -30,12 +30,15 @@
 //! `Tx Contract` message
 //! `Block Header` message
 //! `Block` message
-use std::{any::{Any, TypeId}, format};
 
-use marketplace_helpers::objects::{AgentResult};
-use marketplace_ledger::{Blockchain, Mempool, State};
+mod epoch_state;
+use std::{any::{Any, TypeId}, cmp::Ordering, collections::HashMap, format, todo, vec};
+
+use marketplace_helpers::{functions, objects::{AgentResult, Epoch, ID, IdHash}};
+use marketplace_ledger::{Balances, Blockchain, Jobs, Mempool, State};
 use marketplace_p2p::Message;
-use marketplace_primitives::{Contract, JobContract, ResultPtr, Verify, WorkPtr};
+use marketplace_primitives::{Verify, par_exec::{Bill, Contract, JobContract, ResultPtr, TxContract, WorkPtr}, sync_final::{Block, Proposal, Proposer, Validated, Validator, voter::Voter}};
+use marketplace_wallet::{Key, Owner, voting};
 use marketplace_worker::Worker;
 
 /// This is the `Core` data structure that manages the state of the Marketplace node.
@@ -46,21 +49,28 @@ use marketplace_worker::Worker;
 /// The `Core` data structure methods handle incoming messages from the network
 /// by validating the messages, and handing them over to the appropiate 
 /// state data structure (block chain or mempool) to handle.
-pub struct Core<T: State, W: Worker> {
+pub struct Core<B: Balances, W: Worker> {
     // Blockchain representing dead state
-    chain: Blockchain,
+    chain: Blockchain<B>,
 
-    // Mempool containing live state
+    // Cache of active jobs
+    jobs: Jobs,
+
+    // Mempool containing finalized contracts
     mempool: Mempool,
 
-    // Financial State of the network
-    state: T,
-
     // Worker that executes a VDF, and a Job
-    worker: Option<W>
+    worker: Option<W>,
+
+    // Node authentication
+    owner: Owner,
+
+    // Internal state for changing stages in epoch
+    // from proposal to validator to the next epoch
+    // epoch_state: Option<Box<dyn EpochState>>
 }
 
-impl<T: State, W: Worker> Core<T, W> {
+impl<B: Balances, W: Worker> Core<B, W> {
     /// Initialize a new `Core` object
     /// which comprises of initializing the 
     /// `Live`, `Dead`, and Financial states.
@@ -68,25 +78,36 @@ impl<T: State, W: Worker> Core<T, W> {
     /// This method also takes as a parameter a worker that implements
     /// the `Worker` trait. This worker executes jobs and whiteroom challenges
     /// on behalf of the nodes.
-    pub fn new(state: T, worker: Option<W>) -> Self {
+    /// 
+    /// The `owner` is used to authenticate a node, and it is used to vote
+    /// as proposer or validator of blocks on the network.
+    pub fn new(worker: Option<W>, chain: Blockchain<B>, owner: Owner) -> Self {
         // Initialize the blockchain as the dead state
 
         // TODO: Update chain with blocks from network first
         // if the blockchain is not up to date
-        let chain = Blockchain::new();
 
         // Initialize new mempool to act as live state
-        // keeping track of jobs and unfinalized contracts.
+        // keeping track of finalized contracts.
         let mempool = Mempool::new();
+
+        // Handle active jobs 
+        let jobs = Jobs::new();
 
         // A Worker is also included to execute jobs
         // and solve whiteroom challenges.
         Self {
             chain,
+            jobs,
             mempool,
-            state,
-            worker
+            worker,
+            owner,
         }
+    }
+
+    /// Access Financial State of the network
+    pub fn utxo_state(&self) -> &State<B> {
+        self.chain.state()
     }
 
     /// Handle `Messages` from the network and update `Core` state based on the type of message.
@@ -96,11 +117,14 @@ impl<T: State, W: Worker> Core<T, W> {
     /// 
     /// The objects in the `Messages` passed to this function must be verifiable (`Verify` trait)
     pub async fn handle_message<M>(&mut self, message: &Message<M>) -> AgentResult<()>
-    where M: 'static + Verify
+    where M: 'static + Verify + IdHash
     {
+        // Collect payload and signatures from the message
+        let Message { payload, auth } = message;
+
         // Ensure message payload is authorized/valid
         // through the verify trait
-        message.payload.verify()?;
+        payload.verify()?;
 
         // Check Message type
         let any_payload = &message.payload as &dyn Any;
@@ -110,7 +134,7 @@ impl<T: State, W: Worker> Core<T, W> {
             // TODO: Change the unwrap to handle error without panicking!
             let workptr = any_payload.downcast_ref::<WorkPtr>().unwrap();
 
-            self.handle_work_ptr(workptr)
+            self.handle_job(workptr, auth)
         }
 
         // If message payload is a result pointer, 
@@ -120,7 +144,30 @@ impl<T: State, W: Worker> Core<T, W> {
             let resultptr = any_payload.downcast_ref::<ResultPtr>().unwrap();
 
             // Validate witness with state
-            self.handle_result_ptr(resultptr)
+            self.handle_result_ptr(resultptr, auth)
+        }
+
+        // Handle message containing a Bill payload
+        else if TypeId::of::<M>() == TypeId::of::<Bill>() {
+            let bill = any_payload.downcast_ref::<Bill>().unwrap();
+
+            self.handle_bill(bill, auth)
+        }
+
+        // Handle message with block payload
+        else if TypeId::of::<M>() == TypeId::of::<Proposer>() {
+            // TODO: Change the unwrap to handle error without panicking!
+            let proposer = any_payload.downcast_ref::<Proposer>().unwrap();
+
+            self.handle_proposer(proposer, auth)
+        }
+
+        // Handle Block validator payload
+        else if TypeId::of::<M>() == TypeId::of::<Validator>() {
+            // TODO: Change the unwrap to handle error without panicking!
+            let validator = any_payload.downcast_ref::<Validator>().unwrap();
+
+            self.handle_validator(validator, auth)
         }
 
         // TODO: Handle more types of network messages
@@ -137,7 +184,7 @@ impl<T: State, W: Worker> Core<T, W> {
 
 
 // Handle network messages
-impl<T: State, W: Worker> Core<T, W> {
+impl<B: Balances, W: Worker> Core<B, W> {
     /// ## Work Pointer Handler
     /// 
     /// A `Work Pointer` is sent to the network to initialize a `Job` similar to a Job post.
@@ -157,28 +204,34 @@ impl<T: State, W: Worker> Core<T, W> {
     /// 
     ///   If the `Work Pointer` is expired, the `Job Contract` is stored in the mempool, but never executed. 
     ///   The node simply waits on the results of the `Job`. God bless.
-    fn handle_work_ptr(&mut self, workptr: &WorkPtr) -> AgentResult<()> {
+    fn handle_job(&mut self, workptr: &WorkPtr, auth: &HashMap<ID, Key>) -> AgentResult<()> {
         // Fetch blockheader from blockchain
+        let blk_hdr = workptr.blk_hdr();
+
         // referenced by workptr
-        let Some(blk_hdr) = self.chain.find_hdr(workptr.blk_hdr()) else {
+        let Some(block) = self.chain.get_block_by_id(blk_hdr).unwrap() else {
             return Err(format!(
                 "Error: Block header does not exist"
             ))
         };
-        
-        // Initialize new Job contract
-        let jobctr = JobContract::new(
-            workptr.clone(), 
-            blk_hdr.clone()
+
+        // Get list of utxos refernced by the job as inputs
+        // if any error occurs, the utxo's should be returned to state
+        let utxos = self.chain.get_workptr_utxos(workptr, auth)?;
+
+        let jobctr = JobContract::new_with_auth(
+            workptr.clone(),
+            block.header().clone(),
+            auth.clone()
         );
 
-        let ctr = Contract::JOB(jobctr);
+        // Store job contract in jobs to be handled
+        self.jobs.add_contract(jobctr, utxos);
 
-        // Update asset state using contract
-        self.try_sub_ctr(&ctr)?;
-
-        // Handover job contract to mempool to handle
-        self.mempool.add_job(ctr);
+        // If workptr is recent, execute it with worker
+        if self.chain.is_recent(*blk_hdr).unwrap() {
+            // TODO: Execute work
+        }
 
         Ok(())
     }
@@ -192,77 +245,292 @@ impl<T: State, W: Worker> Core<T, W> {
     /// that returns an `Error` if any problem occurs. (See Mempool) 
     /// 
     /// If result pointer, revert job. 
-    fn handle_result_ptr(&mut self, witness: &ResultPtr) -> AgentResult<()> {
-        let can_consensus = self.mempool.add_resptr(witness.clone())?;
+    fn handle_result_ptr(&mut self, result: &ResultPtr, auth: &HashMap<ID, Key>) -> AgentResult<()> {
+        // Verify result pointer ownership
+        let result_owner = result.witness();
+        let Some(key) = auth.get(&result_owner.id()) else {
+            return Err(format!(
+                "Error: Result Pointer auth not found"
+            ))
+        };
+
+        result_owner.unlock(key, &result.id())?;
+
+        // Get jobctr from Jobs cache
+        let job_id = result.work_id();
+        let can_consensus;
+        let is_consensus;
+
+        // Update job
+        // this is put in a new scope due to borrowing rules!
+        {
+            let job = self.jobs.get_mut_job(&job_id)?;
+
+            // Add result pointer to job
+            // and the auth object
+            job.add_result(result.clone())?;
+            job.add_auth(result_owner, key.clone());
+
+            can_consensus = job.can_consensus();
+            is_consensus = job.is_consensus();
+        }
+
+        // If job contract has reached consensus, handle consensus
+        if is_consensus {
+            self.jobs.handle_consensus(job_id);
+        }
 
         // If job cannot reach consensus, withdraw job
-        // revert state
+        // revert utxo state
         if !can_consensus {
-            let ctr = self.mempool.take_job(witness.work_id())
+            let (_, utxos) = self.jobs.take_job(&job_id)
                 .expect("Illegal: Contract should still exist");
 
-            self.revert_sub_ctr(&ctr);
+            self.chain.revert_jobctr_utxos(utxos);
         }
 
         Ok(())
     }
 
-    // TODO: Handle block and handover block to mempool
-    // Handle block that has no job in state also. 
+    // Handle bill
+    fn handle_bill(&mut self, bill: &Bill, auth: &HashMap<ID, Key>) -> AgentResult<()> {
+        // Get each transaction inputs from the 
+        self.chain.get_bill_utxos(bill, auth)?;
+
+        let txctr = TxContract::new_with_auth(bill.clone(), auth.clone());
+        
+        // TODO: Add TxContract to chain
+        self.chain.add_ctrs(
+            vec![Contract::TX(txctr)]
+        );
+        
+        Ok(())
+    }
+
+    // TODO: Handle received block
+    fn handle_proposer(&mut self, proposer: &Proposer, auth: &HashMap<ID, Key>) -> AgentResult<()> {
+        // Get subusers and blockheader
+        let subusers = self.get_subusers(proposer)?;
+
+        // Subusers must be greater than 0
+        if subusers > 0 {
+            // Proposer should be accepted if it contains the block 
+            // with the highest new gdc extension to the blockchain
+            // Equality of gdc is handled by this method, such that only for
+            // proposals containing the same block does the method return Ordering::Equal.
+            let Ordering::Greater = self.mempool.cmp_proposers(proposer) else {
+                // Update subuser count
+                self.mempool.update_subusers(subusers);
+                return Ok(())
+            };
+
+            // Create a new proposal
+            let proposal = Proposal::new(proposer.clone(), auth.clone());
+
+            // TODO: Validate contracts in a proposal block by checking if
+            // contracts exists in chain cache, if not the contract updates state,
+            // and is added to cache
+            self.validate_block(proposal.block())?;
+
+
+            // Add proposal to mempool and update subusers
+            self.mempool.add_proposal(proposal, subusers);
+
+            // If subusers count is more than threshold, vote on block
+            // as validator
+            todo!()
+        } else {
+            return Err(format!(
+                "Err: Block is not a valid proposed block"
+            ))
+        }
+    }
+
+    // Handle received validator
+    fn handle_validator(&mut self, validator: &Validator, auth: &HashMap<ID, Key>) -> AgentResult<()> {
+        // TODO: Get subusers and blockheader
+        let subusers = self.get_subusers(validator)?;
+
+        // Subusers must be greater than 0
+        if subusers > 0 {
+            // Create new validated struct
+            let validated = Validated::new(validator.clone(), subusers, auth.clone());
+
+            // Add validated to mempool and update subusers
+            self.mempool.add_validator(validated)?;
+
+            // If subusers count is more than threshold, vote on block
+            // as validator
+            todo!()
+        } else {
+            return Err(format!(
+                "Err: Block is not a valid proposed block"
+            ))
+        }
+    }
 
     // TODO: Handle new block header to the state
     // Also update blockchain to accomodate new chosen block
 }
 
+// Handle methods for blocks
+impl<T: Balances, W: Worker> Core<T, W> {
+    /// Validate block, and ensure every contract is valid, and can be gotten from state
+    pub fn validate_block(&mut self, block: &Block) -> AgentResult<()> {
+        // TODO: Check block index and match against local blockchain
 
-// Handle Ledger State changes
-impl<T: State, W: Worker> Core<T, W> {
+        for ctr in block.iter() {
+            // Verify contract
+            ctr.verify()?;
 
-    // Subtracts Contract transaction inputs from the global state
-    // If inputs could not be found, a double spend error is assumed.
-    pub fn try_sub_ctr(&mut self, ctr: &Contract) -> AgentResult<()> {
-        match ctr {
-            Contract::JOB(jobctr) => {
-                self.state.try_sub_ipt(&jobctr.get_tx())
-            },
-            Contract::TX(txctr) => {
-                // Store tx already used to update state
-                // so that if any error occurs later, all state
-                // changes can be safely reversed
-                let mut txs = Vec::new();
+            // If contract exists in cache, the contract 
+            // is already valid with respect to utxo state.
+            // Move on!
+            let None = self.chain.get_ctr(&ctr.id()) else {
+                continue;
+            };
 
-                for tx in txctr.get_tx().iter() {
-                    if let Err(e) = self.state.try_sub_ipt(tx) {
-                        // Handle error by reverting previous state changes
-                        for tx in txs.into_iter().rev() {
-                            self.state.revert_sub_ipt(tx);
-                        }
+            // If contract is a Job Contract, check if it exists in
+            // jobs list.
+            // If it exists, then add complete job contract to chain cache, and remove
+            // job from joblist
+            if let Contract::JOB(jobctr) = ctr {
+                let Some(_) = self.jobs.take_job(&jobctr.id()) else {
+                    self.chain.add_ctrs(vec![ctr.clone()]);
+                    continue;
+                };
+            }
 
-                        return Err(e)
-                    }
+            // Given that contract has not been found in any local storage
+            // we can now add the contract to chain cache after removing it's
+            // spent utxo from utxo state
+            match ctr {
+                Contract::JOB(jobctr) => {
+                    // block referenced by workptr should exist
+                    let Some(_) = self.chain
+                        .get_block_by_id(&jobctr.get_blk_hdr().id())
+                        .expect("Error encountered finding block referenced by contract from blockchain DB") 
+                    else {
+                        return Err(format!(
+                            "Error: Block {} does not exist in Blockchain",
+                            functions::from_bytes(&jobctr.get_blk_hdr().id()) 
+                        ))
+              
+                    };
 
-                    txs.push(tx);
+                    // If error removing spent utxos, return Err
+                    let _ = self.chain.get_workptr_utxos(
+                        jobctr.input(), 
+                        jobctr.auth()
+                    )?;
+                },
+                Contract::TX(txctr) => {
+                    let _ = self.chain.get_bill_utxos(
+                        txctr.bill(), 
+                        txctr.auth()
+                    )?;
                 }
+            }
 
-                Ok(())
-            },
+            // Add ctr to cache after removing utxos
+            // from state
+            self.chain.add_ctrs(vec![ctr.clone()]);
         }
+
+        Ok(())
     }
 
-    // Revert an updated contract state
-    // which is done in the reverse way state was updated
-    // representing a rollback.
-    pub fn revert_sub_ctr(&mut self, ctr: &Contract) {
-        match ctr {
-            Contract::JOB(jobctr) => {
-                self.state.revert_sub_ipt(&jobctr.get_tx());
-            },
-            Contract::TX(txctr) => {
-                // Rollback in reverse
-                for tx in txctr.get_tx().iter().rev() {
-                    self.state.revert_sub_ipt(tx);
-                }
-            },
-        }
+    /// Try to generate a new `Block` form a list of finalized `Contracts`
+    /// to send to the network
+    /// 
+    /// A `Block` can only be valid to send to the rest of the network
+    /// if the current node is chosen as a block proposer
+    pub fn propose_block(&mut self) -> AgentResult<()> {
+        let block = self.chain.new_block();
+
+        // Attempt proposer to 
+        // send to the network.
+        let proposer = Proposer::new(&self.owner, block);
+        
+        // If subusers is greater than 0, node has been chosen to propose
+        // block.
+        if self.get_subusers(&proposer)? > 0  {
+            // TODO: Send proposal to network
+            todo!()
+        };
+
+        Ok(())
+    }
+
+    /// Attempt to vote an a `Block` that has been observed
+    /// to be the highest new gdc addition to the chain
+    /// by sending it's `BlockHeader` to the network as a finalized `Block`
+    pub fn finalize_block(&mut self) -> AgentResult<()> {
+        // Get proposer from mempool to finalize
+        let Some(proposal) = self.mempool.get_proposal_to_finalize() else {
+            return Err(format!(
+                "Error: No proposal to finalize"
+            ))
+        };
+
+        // Build validator using block id (header hash)
+        let validator = Validator::new(
+            &self.owner, 
+            &self.chain.seed(), 
+            proposal.proposer()
+        );
+
+        // Get subusers using VRF output from validator
+        // If subusers is greater than 0, node has been chosen to vote on
+        // block being finalized.
+        let subusers = self.get_subusers(&validator)?;
+
+        if subusers > 0 {
+            // TODO: Send validator to network
+            todo!()
+        };
+
+        todo!()
+    }
+
+    /// Get subusers using VRF ouptput
+    pub fn get_subusers(&self, voter: &impl Voter) -> AgentResult<u64> {
+        // User gdc balance
+        let user_amount = self.utxo_state().get_gdc_balance(voter.owner());
+
+        // User total currency
+        let total_currency = self.chain
+            .total_gdc()
+            .expect("Error: Could not fetch total goldcoin data from blockchain");
+
+        voting::subusers_count(
+            voter.get_vrf_opt()?, 
+            user_amount, 
+            total_currency
+        )
+    }
+}
+
+// Handle async methods that can be spawned as tasks
+impl<T: Balances, W: Worker> Core<T, W> {
+    /// This is the action to be taken every epoch by the marketplace node.
+    /// 
+    /// This method takes a list of finalized `Contracts` from the network
+    /// and bundles it into a `Block`.
+    /// 
+    /// The `Block` is then added to the cached blocks in the blockchain
+    /// to be proposed.
+    /// 
+    /// This process happens every epoch in a constant loop
+    pub fn handle_epoch(&mut self) {
+        // Add ctrs to cache
+        self.chain.add_ctrs(
+            self.jobs.get_pending_jobs()
+        );
+    }
+
+    /// Handle Synchronous finalization
+    pub fn handle_sync_final(&mut self) {
+        // 
     }
 }

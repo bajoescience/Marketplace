@@ -1,9 +1,13 @@
-use std::{collections::{HashMap, hash_map::Entry}, format};
+use std::{format};
 
 use borsh::{BorshDeserialize, BorshSerialize};
 use marketplace_helpers::{functions, objects::{AgentResult, WorkSize}};
-use marketplace_wallet::{Key, Lock, crypto::WRProof};
-use crate::{Verify, WRVote, helpers::objects::{ID, IdHash, WorkAddr}};
+use marketplace_wallet::{Lock, crypto::WRProof};
+use crate::{
+    Verify,
+    helpers::objects::{ID, IdHash, WorkAddr},
+    par_exec::WRVote,
+};
 
 /// # Result Info
 /// 
@@ -54,7 +58,7 @@ impl PartialEq for ResultInfo {
 /// **NOTE: The values used in this example are dummy values**
 /// 
 /// ```
-/// use marketplace_primitives::{ResultPtr, ResultInfo, Verify};
+/// use marketplace_primitives::{par_exec::{ResultInfo, ResultPtr}, Verify};
 /// use marketplace_helpers::objects::{WU, IdHash, WorkSize};
 /// use marketplace_wallet::{crypto::Crypto, Owner};
 /// 
@@ -94,11 +98,6 @@ impl PartialEq for ResultInfo {
 ///     res_addr,
 ///     owner.as_wr_lock(),
 /// );
-/// 
-/// // Lock result pointer to prove ownership
-/// let key = owner.sign(&resultptr.id());
-/// resultptr.add_auth(owner.as_wr_lock(), key, false).unwrap();
-/// 
 /// // Verify it's a valid Result pointer
 /// assert!(resultptr.verify().is_ok());
 /// 
@@ -120,10 +119,6 @@ pub struct ResultPtr {
 
     // Whiteroom memeber
     witness: Lock,
-
-    // Prove ownership of resultptr
-    #[borsh(skip)]
-    auth: HashMap<ID, Key>
 }
 
 impl ResultPtr {
@@ -139,6 +134,7 @@ impl ResultPtr {
     }
 }
 
+// To ensure that there are no multiples in the whiteroom
 impl PartialEq for ResultPtr {
     fn eq(&self, other: &Self) -> bool {
         self.id() == other.id()
@@ -164,7 +160,6 @@ impl ResultPtr {
             witness,
             result,
             wr_proof,
-            auth: HashMap::new(),
         }
     }
 }
@@ -194,24 +189,7 @@ impl ResultPtr {
 
 // Setter methods
 impl ResultPtr {
-    pub fn add_auth(&mut self, lock: Lock, key: Key, force: bool) -> AgentResult<()> {
-        match self.auth.entry(lock.id()) {
-            Entry::Vacant(entry) => {
-                entry.insert(key);
-            },
-            Entry::Occupied(mut entry) if force => {
-                entry.insert(key);
-            },
-            _ => {
-                return Err(format!(
-                    "Key already exists for Lock ID {}",
-                    functions::from_bytes(&lock.id())
-                ))
-            }
-        };
-
-        Ok(())
-    }
+    
 }
 
 /// The ResultPtr proof is verified later
@@ -226,10 +204,9 @@ impl Verify for ResultPtr {
     /// To fully validate it, use a Contract instance with the 
     /// method Contract.validate_result(ResultPtr)
     fn verify(&self) -> AgentResult<()> {
-        // Unlock whiteroom
+        // Ensure whiteroom owns the proof        
         let witness = self.witness();
 
-        // Ensure whiteroom owns the proof
         let Lock::WHITEROOM(pk_hash) = witness else {
             return Err(format!(
                 "Error: Whiteroom Tx input must locked by Whiteroom",
@@ -242,16 +219,6 @@ impl Verify for ResultPtr {
             ))
         }
 
-        // Unlock Result Ptr to prove full ownership
-        if let Some(key) = self.auth.get(&witness.id()) {
-            witness.unlock(key, &self.id())?;
-        } else {
-            return Err(format!(
-                "Error: Key does not exist for workptr {}",
-                functions::from_bytes(&witness.id()), 
-            ));
-        };
-
         Ok(())
     }
 }
@@ -259,7 +226,12 @@ impl Verify for ResultPtr {
 // Each ResultPtr can be represented as a Whiteroom Vote
 impl WRVote for ResultPtr {
     fn as_vote(&self) -> ID {
-        self.result.id()
+        self.result().id()
+    }
+
+    // Each resultptr has only one vote
+    fn votes(&self) -> usize {
+        1
     }
 }
 
@@ -296,6 +268,68 @@ mod tests {
         )
     }
 
+    // Result metadata and vote identity should be exposed consistently.
+    #[test]
+    fn result_metadata_and_vote_identity() {
+        let owner = Owner::new_sig();
+        let result_hash = [7u8; 32];
+        let work_id = [8u8; 32];
+        let address = [9u8; 32];
+        let spent = WorkSize::build(WU::try_from(20000).unwrap()).unwrap();
+        let result = ResultInfo::new(result_hash, spent);
+        let proof = wr_proof(&owner, [2; 32]);
+        let result_ptr = ResultPtr::new(
+            work_id,
+            result,
+            proof,
+            address,
+            owner.as_wr_lock(),
+        );
+
+        assert_eq!(result_ptr.work_id(), work_id);
+        assert_eq!(result_ptr.result().opt_hash(), result_hash);
+        assert_eq!(
+            result_ptr.result().spent().into(),
+            spent.into()
+        );
+        assert_eq!(result_ptr.res_addr(), &address);
+        assert_eq!(result_ptr.witness(), owner.as_wr_lock());
+        assert_eq!(result_ptr.as_vote(), result_ptr.result().id());
+    }
+
+    // Result pointers with matching result information should be compatible.
+    #[test]
+    fn result_pointers_compare_result_information() {
+        let owner = Owner::new_sig();
+        let spent = WorkSize::build(WU::try_from(20000).unwrap()).unwrap();
+        let result = ResultInfo::new([4u8; 32], spent);
+        let proof = wr_proof(&owner, [2; 32]);
+        let first = ResultPtr::new(
+            [1u8; 32],
+            result.clone(),
+            proof.clone(),
+            [2u8; 32],
+            owner.as_wr_lock(),
+        );
+        let matching = ResultPtr::new(
+            [3u8; 32],
+            result,
+            proof.clone(),
+            [4u8; 32],
+            owner.as_wr_lock(),
+        );
+        let different = ResultPtr::new(
+            [5u8; 32],
+            ResultInfo::new([6u8; 32], spent),
+            proof,
+            [7u8; 32],
+            owner.as_wr_lock(),
+        );
+
+        assert!(first.is_same(&matching));
+        assert!(!first.is_same(&different));
+    }
+
     // correct usage of Resptr API
     #[test]
     fn test_res_ptr() -> AgentResult<()> {
@@ -307,14 +341,11 @@ mod tests {
         // Prove ownership of two whiteroom inputs using VDF + VRF
         // and build res_ptr
         let wr_proof = wr_proof(&owner, [2; 32]);
-        let mut resptr = res_ptr(
+        let resptr = res_ptr(
             WorkSize::build(spent).unwrap(), 
             &owner, 
             wr_proof
         );
-
-        let key = owner.sign(&resptr.id());
-        resptr.add_auth(owner.as_wr_lock(), key, false).unwrap();
 
         resptr.verify()
     }
@@ -335,45 +366,14 @@ mod tests {
         // and build res_ptr but 
         // build WRproof with false owner
         let wr_proof = wr_proof(&f_owner, [2; 32]);
-        let mut resptr = res_ptr(
+        let resptr = res_ptr(
             WorkSize::build(spent).unwrap(), 
             &wr_owner, 
             wr_proof
         );
 
-        // Sign with real WR owner
-        let key = wr_owner.sign(&resptr.id());
-        resptr.add_auth(wr_owner.as_wr_lock(), key, false).unwrap();
-
         let err = resptr.verify().unwrap_err();
 
         assert_eq!(err, "Error: Whiteroom tx owner not the same as proof owner");
-    }
-
-    // Result ptr tx must be locked by a whiteroom
-    // Only whiteroom can be receivers
-    #[test]
-    pub fn lock_res_ptr_tx() {
-        let owner = Owner::new_sig();
-        let spent = WU::try_from(20000).unwrap();
-
-        let wr_proof = wr_proof(&owner, [2; 32]);
-        let mut res_ptr = res_ptr(
-            WorkSize::build(spent).unwrap(),
-            &owner, 
-            wr_proof
-        );
-
-        res_ptr.add_auth(
-            owner.as_lock(), 
-            owner.sign(&res_ptr.id()), 
-            false
-        ).unwrap();
-
-        let err = res_ptr.verify().unwrap_err();
-
-        assert!(
-            err.contains("Error: Key does not exist for workptr"),
-        )
     }
 }
