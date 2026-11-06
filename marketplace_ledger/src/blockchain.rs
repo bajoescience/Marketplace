@@ -1,10 +1,10 @@
 use marketplace_helpers::{functions, objects::{AgentResult, Epoch, ID, IdHash, StdResult, WU}};
 
 use marketplace_primitives::{
-    Verify, par_exec::{Contract, Whiteroom}, sync_final::{Block, BlockBody, Validated, blockinfo::BlockInfo},
+    par_exec::{Bill, Contract, TxOpt, TxOptRef, Whiteroom, WorkPtr}, sync_final::{Block, BlockBody, Validated, blockinfo::BlockInfo},
 };
 
-use std::{collections::HashMap, format, panic, path::Path};
+use std::{collections::HashMap, panic, path::Path};
 
 use redb::{Database, Error, ReadableDatabase, ReadableTable, ReadableTableMetadata, TableDefinition};
 
@@ -29,9 +29,9 @@ const AUTHS: TableDefinition<Epoch, &[u8]> = TableDefinition::new("auths");
 /// total goldcoin in chain ("gdc": [u8; 16])
 const METADATA: TableDefinition<&str, &[u8]> = TableDefinition::new("metadata");
 
-use marketplace_wallet::voting::EXPECTED_VOTERS;
+use marketplace_wallet::{Key, voting::EXPECTED_VOTERS};
 
-use crate::{Balances, State};
+use crate::{Balances, State, state};
 
 // MAX whiteroom members for validators
 const WHITEROOM_MAX: usize = functions::max_wr_size_from_expected(EXPECTED_VOTERS);
@@ -115,43 +115,6 @@ impl<B: Balances> Blockchain<B> {
             cache: Some(HashMap::new()),
         })
     }
-
-    // Validate a contract
-    fn validate_contract(&self, ctr: &Contract) -> AgentResult<()> {
-        match ctr {
-            Contract::TX(txctr) => {
-                txctr.verify()
-            },
-            Contract::JOB(jobctr) => {
-                // Get blockinfo referenced by Job contract
-                let Some(_) = self.get_block_by_id(&jobctr.get_blk_hdr().id())
-                    .expect("Error encountered finding block referenced by contract from blockchain DB") 
-                else {
-                    return Err(format!(
-                        "Error: Block {} does not exist in Blockchain",
-                        functions::from_bytes(&jobctr.get_blk_hdr().id()) 
-                    ))
-              
-                };
-
-                // Verify Job contract
-                jobctr.verify()
-            },
-        }
-    }
-
-    // Validate a block
-    pub fn validate_block(&self, block: &Block) -> AgentResult<()> {
-        for ctr in block.ctrs() {
-            self.validate_contract(ctr)?;
-        }
-
-        // Validate block header using previous block header
-        let prev_block = self.latest_block()
-            .expect("Latest block could not be fetched");
-
-        block.validate(prev_block.header())
-    }
 }
 
 // Handle modifying block body
@@ -218,10 +181,121 @@ impl<B: Balances> Blockchain<B> {
     
 }
 
-// Getter methods for UtxO state
+// Methods for UtxO state
 impl<B: Balances> Blockchain<B> {
-    pub fn state(&mut self) -> &mut State<B> {
-        &mut self.state
+    pub fn state(&self) -> &State<B> {
+        &self.state
+    }
+
+    // Update state with contracts in block
+    pub fn update_state_with_block(&mut self, block: &Block) -> AgentResult<()> {
+        for ctr in block.ctrs() {
+            // Remove contract from cache
+            // Given that all contracts must have been added to cache 
+            // during validation
+            let _ = self.take_ctr(ctr.id())
+                .expect("Error: Contract not found in cache");
+            
+            match ctr {
+                Contract::JOB(jobctr) => {
+                    let tx = jobctr.get_tx()?;
+                    self.state.put_opts(&tx);
+                },
+                Contract::TX(txctr) => {
+                    for tx in txctr.get_txs() {
+                        self.state.put_opts(tx);
+                    }
+                }
+            }
+        }
+
+        // Validate block header using previous block header
+        let prev_block = self.latest_block()
+            .expect("Latest block could not be fetched");
+
+        block.validate(prev_block.header())
+    }
+
+    // Try to take input UTXO's for jobcontracts
+    pub fn get_workptr_utxos(
+        &mut self, 
+        workptr: &WorkPtr, 
+        auth: &HashMap<ID, Key>
+    ) -> AgentResult<Vec<(TxOptRef, TxOpt)>> {
+        // Get goldcoin utxo list, which is the only currency that work can be done with
+        let balances = self.state.get_mut_coin_balance_list();
+
+        // List of utxos
+        let mut ref_opts: Vec<(TxOptRef, TxOpt)> = Vec::new();
+
+        for utxo_ref in workptr.ipts() {
+            // Ensure utxo exists
+            let Some(utxo) = balances.get(*utxo_ref) else {
+                return Err(format!(
+                    "Error: Tx Output {} not found.",
+                    functions::from_bytes(&utxo_ref.id())
+                ))
+            };
+
+            match state::confirm_utxo(&utxo, &workptr.id(), auth) {
+                Ok(_) => {
+                    ref_opts.push((utxo_ref.clone(), utxo))
+                },
+                Err(e) => {
+                    // Revert removed utxos
+                    for (utxo_ref, utxo) in ref_opts {
+                        balances.put(utxo_ref, utxo);
+                    }
+                    return Err(e);
+                }
+            };
+        }
+
+        Ok(ref_opts)
+    }
+
+    // Return utxo taken by a job back to state
+    pub fn revert_jobctr_utxos(
+        &mut self, 
+        utxos: Vec<(TxOptRef, TxOpt)>
+    ) {
+        let balances = self.state.get_mut_coin_balance_list();
+
+        for (utxo_ref, utxo) in utxos.into_iter().rev() {
+            balances.put(utxo_ref, utxo);
+        }
+    }
+
+    // Subtracts transaction inputs from the global state
+    // If inputs could not be found, a double spend error is assumed.
+    pub fn get_bill_utxos(&mut self, bill: &Bill, auth: &HashMap<ID, Key>) -> AgentResult<()> {
+        // Get the referenced utxos for each transaction.
+        // If any issues occur, rollback the removed
+
+        // Store each tx and corresponding utxos, so that if any 
+        // rollback occurs, it can be referenced
+        let mut tx_ref_opts = Vec::new();
+
+        for tx in bill.get_txs().iter() {
+            // Try to get ref opts for txs
+            match self.state.get_ref_opts(tx, &bill.id(), auth) {
+                Ok(ref_opts) => {
+                    // TODO: Check ipts owners consented
+                    // Store tx opts
+                    tx_ref_opts.push((tx, ref_opts));
+                },
+                Err(e) => {
+                    // Revert state changes
+                    for (tx, ref_opts) in tx_ref_opts.into_iter() {
+                        self.state.revert_ref_opts(tx, ref_opts);
+                    }
+                    return Err(e)
+                }
+                
+            };
+        }
+
+        Ok(())
     }
 }
 
@@ -454,7 +528,7 @@ impl<B: Balances> Blockchain<B> {
     pub fn publish_blockinfo(&mut self, blockinfo: BlockInfo) -> AgentResult<()> {
 
         // Confirm and validate block
-        self.validate_block(blockinfo.block())?;
+        self.update_state_with_block(blockinfo.block())?;
 
         // Add block to db
         self.add_to_db(blockinfo)

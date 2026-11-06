@@ -35,9 +35,9 @@ mod epoch_state;
 use std::{any::{Any, TypeId}, cmp::Ordering, collections::HashMap, format, todo, vec};
 
 use marketplace_helpers::{functions, objects::{AgentResult, Epoch, ID, IdHash}};
-use marketplace_ledger::{Balances, Blockchain, Jobs, Mempool, State, state};
+use marketplace_ledger::{Balances, Blockchain, Jobs, Mempool, State};
 use marketplace_p2p::Message;
-use marketplace_primitives::{Verify, par_exec::{Bill, Contract, JobContract, ResultPtr, TxContract, TxOpt, TxOptRef, WorkPtr}, sync_final::{Block, Proposal, Proposer, Validated, Validator, voter::Voter}};
+use marketplace_primitives::{Verify, par_exec::{Bill, Contract, JobContract, ResultPtr, TxContract, WorkPtr}, sync_final::{Block, Proposal, Proposer, Validated, Validator, voter::Voter}};
 use marketplace_wallet::{Key, Owner, voting};
 use marketplace_worker::Worker;
 
@@ -106,7 +106,7 @@ impl<B: Balances, W: Worker> Core<B, W> {
     }
 
     /// Access Financial State of the network
-    pub fn utxo_state(&mut self) -> &mut State<B> {
+    pub fn utxo_state(&self) -> &State<B> {
         self.chain.state()
     }
 
@@ -217,7 +217,7 @@ impl<B: Balances, W: Worker> Core<B, W> {
 
         // Get list of utxos refernced by the job as inputs
         // if any error occurs, the utxo's should be returned to state
-        let utxos = self.get_workptr_utxos(workptr, auth)?;
+        let utxos = self.chain.get_workptr_utxos(workptr, auth)?;
 
         let jobctr = JobContract::new_with_auth(
             workptr.clone(),
@@ -286,7 +286,7 @@ impl<B: Balances, W: Worker> Core<B, W> {
             let (_, utxos) = self.jobs.take_job(&job_id)
                 .expect("Illegal: Contract should still exist");
 
-            self.revert_jobctr_utxos(utxos);
+            self.chain.revert_jobctr_utxos(utxos);
         }
 
         Ok(())
@@ -295,7 +295,7 @@ impl<B: Balances, W: Worker> Core<B, W> {
     // Handle bill
     fn handle_bill(&mut self, bill: &Bill, auth: &HashMap<ID, Key>) -> AgentResult<()> {
         // Get each transaction inputs from the 
-        self.get_bill_utxos(bill, auth)?;
+        self.chain.get_bill_utxos(bill, auth)?;
 
         let txctr = TxContract::new_with_auth(bill.clone(), auth.clone());
         
@@ -373,96 +373,12 @@ impl<B: Balances, W: Worker> Core<B, W> {
     // Also update blockchain to accomodate new chosen block
 }
 
-
-// Handle Ledger State changes
-impl<T: Balances, W: Worker> Core<T, W> {
-    // Try to take input UTXO's for jobcontracts
-    pub fn get_workptr_utxos(
-        &mut self, 
-        workptr: &WorkPtr, 
-        auth: &HashMap<ID, Key>
-    ) -> AgentResult<Vec<(TxOptRef, TxOpt)>> {
-        // Get goldcoin utxo list, which is the only currency that work can be done with
-        let balances = self.utxo_state().get_mut_coin_balance_list();
-
-        // List of utxos
-        let mut ref_opts: Vec<(TxOptRef, TxOpt)> = Vec::new();
-
-        for utxo_ref in workptr.ipts() {
-            // Ensure utxo exists
-            let Some(utxo) = balances.get(*utxo_ref) else {
-                return Err(format!(
-                    "Error: Tx Output {} not found.",
-                    functions::from_bytes(&utxo_ref.id())
-                ))
-            };
-
-            match state::confirm_utxo(&utxo, &workptr.id(), auth) {
-                Ok(_) => {
-                    ref_opts.push((utxo_ref.clone(), utxo))
-                },
-                Err(e) => {
-                    // Revert removed utxos
-                    for (utxo_ref, utxo) in ref_opts {
-                        balances.put(utxo_ref, utxo);
-                    }
-                    return Err(e);
-                }
-            };
-        }
-
-        Ok(ref_opts)
-    }
-
-    // Return utxo taken by a job back to state
-    pub fn revert_jobctr_utxos(
-        &mut self, 
-        utxos: Vec<(TxOptRef, TxOpt)>
-    ) {
-        let balances = self.utxo_state().get_mut_coin_balance_list();
-
-        for (utxo_ref, utxo) in utxos.into_iter().rev() {
-            balances.put(utxo_ref, utxo);
-        }
-    }
-
-    // Subtracts transaction inputs from the global state
-    // If inputs could not be found, a double spend error is assumed.
-    pub fn get_bill_utxos(&mut self, bill: &Bill, auth: &HashMap<ID, Key>) -> AgentResult<()> {
-        // Get the referenced utxos for each transaction.
-        // If any issues occur, rollback the removed
-
-        // Store each tx and corresponding utxos, so that if any 
-        // rollback occurs, it can be referenced
-        let mut tx_ref_opts = Vec::new();
-
-        for tx in bill.get_txs().iter() {
-            // Try to get ref opts for txs
-            match self.utxo_state().get_ref_opts(tx, &bill.id(), auth) {
-                Ok(ref_opts) => {
-                    // TODO: Check ipts owners consented
-                    // Store tx opts
-                    tx_ref_opts.push((tx, ref_opts));
-                },
-                Err(e) => {
-                    // Revert state changes
-                    for (tx, ref_opts) in tx_ref_opts.into_iter() {
-                        self.utxo_state().revert_ref_opts(tx, ref_opts);
-                    }
-                    return Err(e)
-                }
-                
-            };
-        }
-
-        Ok(())
-    }
-}
-
 // Handle methods for blocks
 impl<T: Balances, W: Worker> Core<T, W> {
     /// Validate block, and ensure every contract is valid, and can be gotten from state
     pub fn validate_block(&mut self, block: &Block) -> AgentResult<()> {
+        // TODO: Check block index and match against local blockchain
+
         for ctr in block.iter() {
             // Verify contract
             ctr.verify()?;
@@ -490,14 +406,26 @@ impl<T: Balances, W: Worker> Core<T, W> {
             // spent utxo from utxo state
             match ctr {
                 Contract::JOB(jobctr) => {
+                    // block referenced by workptr should exist
+                    let Some(_) = self.chain
+                        .get_block_by_id(&jobctr.get_blk_hdr().id())
+                        .expect("Error encountered finding block referenced by contract from blockchain DB") 
+                    else {
+                        return Err(format!(
+                            "Error: Block {} does not exist in Blockchain",
+                            functions::from_bytes(&jobctr.get_blk_hdr().id()) 
+                        ))
+              
+                    };
+
                     // If error removing spent utxos, return Err
-                    let _ = self.get_workptr_utxos(
+                    let _ = self.chain.get_workptr_utxos(
                         jobctr.input(), 
                         jobctr.auth()
                     )?;
                 },
                 Contract::TX(txctr) => {
-                    let _ = self.get_bill_utxos(
+                    let _ = self.chain.get_bill_utxos(
                         txctr.bill(), 
                         txctr.auth()
                     )?;
@@ -566,7 +494,7 @@ impl<T: Balances, W: Worker> Core<T, W> {
     }
 
     /// Get subusers using VRF ouptput
-    pub fn get_subusers(&self, voter: &impl Voter,) -> AgentResult<u64> {
+    pub fn get_subusers(&self, voter: &impl Voter) -> AgentResult<u64> {
         // User gdc balance
         let user_amount = self.utxo_state().get_gdc_balance(voter.owner());
 

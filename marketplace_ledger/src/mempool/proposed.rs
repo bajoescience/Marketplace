@@ -2,7 +2,6 @@ use std::cmp::Ordering;
 
 use marketplace_primitives::sync_final::{Proposal, Proposer};
 
-
 pub struct ProposedBlock {
     // Winning Proposed block
     pub proposal: Option<Proposal>,

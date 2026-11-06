@@ -7,8 +7,7 @@ pub use self::tx::TxContract;
 use borsh::{BorshDeserialize, BorshSerialize};
 
 use crate::{
-    helpers::objects::{AgentResult, ID, WU},
-    Verify,
+    Verify, helpers::objects::{AgentResult, ID, WU}, par_exec::TxOpt,
 };
 
 // Contract type for a job
@@ -32,11 +31,35 @@ impl Contract {
             WU::default()
         }
     }
+}
 
+// Getter methods
+impl Contract {
     pub fn id(&self) -> ID {
         match self {
             Self::JOB(jobctr) => jobctr.id(),
             Self::TX(txctr) => txctr.id()
+        }
+    }
+
+    /// Contract utxo outputs
+    pub fn opts(&self) -> Vec<TxOpt> {
+        match self {
+            Self::JOB(jobctr) => {
+                jobctr.get_tx().unwrap()
+                    .opts()
+                    .into_iter()
+                    .map(|opt| *opt)
+                    .collect()
+            },
+            Self::TX(txctr) => {
+                txctr.get_txs()
+                    .iter()
+                    .map(|tx| tx.opts().iter())
+                    .flatten()
+                    .map(|opt| *opt)
+                    .collect()
+            }
         }
     }
 }
