@@ -114,7 +114,7 @@ impl BlockBody {
 #[cfg(test)]
 mod tests {
     use std::{assert_eq, thread};
-    use marketplace_helpers::objects::{AgentResult, CONTRACT_WHITEROOM_SIZE, IdHash};
+    use marketplace_helpers::{functions, objects::{AgentResult, CONTRACT_WHITEROOM_SIZE, IdHash}};
 use marketplace_wallet::Owner;
 
 use crate::{
@@ -133,6 +133,7 @@ use crate::{
 
         // Initialize valid Work Ptr
         let workptr = workptr(&owner, blk_hdr.id());
+        let vdf_diff = functions::vdf_difficulty(workptr.work_size().into(), blk_hdr.vrf_t());
         let mut jobctr = JobContract::new(workptr, blk_hdr.clone());
 
         // Initialize size result pointers
@@ -143,7 +144,6 @@ use crate::{
 
         // Assemble Whiteroom results
         for _ in 0..CONTRACT_WHITEROOM_SIZE {
-            let header = blk_hdr.clone();
             handles.push(thread::spawn(move || {
                 let wr_owner = Owner::new_sig();
 
@@ -151,7 +151,7 @@ use crate::{
                 let result_ptr = resultptr(
                     work_id,
                     &wr_owner,
-                    header.vdf_diff()
+                    vdf_diff
                 );
 
                 let key = wr_owner.sign(&result_ptr.id());

@@ -87,7 +87,9 @@ impl Verify for Contract {
 pub mod tests {
     use std::thread;
 
-    use crate::{
+    use marketplace_helpers::functions;
+
+use crate::{
         helpers::objects::{AgentResult, CONTRACT_WHITEROOM_SIZE, IdHash, WU},
         par_exec::{
             Bill, Tx, TxIdentifier, TxOpt, TxOptRef,
@@ -109,6 +111,7 @@ pub mod tests {
 
         // Input
         let workptr = workptr(&ipt_owner, blk_hdr.id());
+        let vdf_diff = functions::vdf_difficulty(workptr.work_size().into(), blk_hdr.vrf_t());
         let mut jobctr = JobContract::new(workptr, blk_hdr.clone());
         
         // ResultPtr Initializers
@@ -118,8 +121,6 @@ pub mod tests {
 
         // Assemble Whiteroom max results
         for _ in 0..CONTRACT_WHITEROOM_SIZE {
-            let header = blk_hdr.clone();
-
             handles.push(thread::spawn(move || {
                 let wr_owner = Owner::new_sig();
 
@@ -127,7 +128,7 @@ pub mod tests {
                 let result_ptr = resultptr(
                     work_id,
                     &wr_owner,
-                    header.vdf_diff()
+                    vdf_diff
                 );
 
                 let key = wr_owner.sign(&result_ptr.id());

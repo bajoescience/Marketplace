@@ -1,7 +1,7 @@
 use std::{collections::{HashMap, hash_map::Entry}, format, todo};
 
 use borsh::{BorshDeserialize, BorshSerialize};
-use marketplace_helpers::{functions, objects::{AgentResult, CONTRACT_WHITEROOM_SIZE, ID, IdHash, WU, WorkSize}};
+use marketplace_helpers::{functions::{self, vdf_difficulty}, objects::{AgentResult, CONTRACT_WHITEROOM_SIZE, ID, IdHash, WU, WorkSize}};
 use marketplace_wallet::{Key, Lock, crypto::Crypto};
 
 use crate::{par_exec::{ResultPtr, Tx, Whiteroom, WorkPtr}, sync_final::BlockHeader, Verify};
@@ -199,7 +199,10 @@ impl JobContract {
         // according to the Whitepaper (Page 4)
         
         // TODO: This is to be chnaged depending on the job size
-        let diff = self.get_blk_hdr().vdf_diff();
+        let diff = vdf_difficulty(
+            self.input().work_size().into(), 
+            self.blk_hdr.vrf_t()
+        );
 
         let vrf_result = Crypto::wr_prove(result.wr_proof(), &seed, diff)?;
 
@@ -334,6 +337,8 @@ use super::*;
 
         // Input
         let workptr = workptr(&ipt_owner, blk_hdr.id());
+        let vdf_diff = functions::vdf_difficulty(workptr.work_size().into(), blk_hdr.vrf_t());
+
         let mut ctr = JobContract::new(workptr, blk_hdr.clone());
 
         // Sign workptr and add to ctr
@@ -344,7 +349,7 @@ use super::*;
         let result_ptr = resultptr(
             ctr.input().id(),
             &wr_owner,
-            blk_hdr.vdf_diff()
+            vdf_diff
         );
 
         // Sign result and add to job contract
@@ -371,6 +376,8 @@ use super::*;
 
         // Input
         let workptr = workptr(&ipt_owner, blk_hdr.id());
+        let vdf_diff = functions::vdf_difficulty(workptr.work_size().into(), blk_hdr.vrf_t());
+
         let mut ctr = JobContract::new(workptr, blk_hdr.clone());
 
         // ResultPtr Initializers
@@ -380,7 +387,6 @@ use super::*;
 
         // Assemble Whiteroom max results
         for _ in 0..CONTRACT_WHITEROOM_SIZE {
-            let header = blk_hdr.clone();
             handles.push(thread::spawn(move || {
                 let wr_owner = Owner::new_sig();
 
@@ -388,7 +394,7 @@ use super::*;
                 let result_ptr = resultptr(
                     work_id,
                     &wr_owner,
-                    header.vdf_diff()
+                    vdf_diff
                 );
 
                 let key = wr_owner.sign(&result_ptr.id());
@@ -455,15 +461,17 @@ use super::*;
         let input_owner = Owner::new_sig();
         let result_owner = Owner::new_sig();
         let block_header = blk_hdr();
+        let workptr = workptr(&input_owner, block_header.id());
+        let vdf_diff = functions::vdf_difficulty(workptr.work_size().into(), block_header.vrf_t());
         let mut contract = JobContract::new(
-            workptr(&input_owner, block_header.id()),
+            workptr,
             block_header.clone(),
         );
 
         let result = resultptr(
             contract.id(),
             &result_owner,
-            block_header.vdf_diff(),
+            vdf_diff,
         );
 
         let key = result_owner.sign(&result.id());
@@ -484,14 +492,16 @@ use super::*;
         let input_owner = Owner::new_sig();
         let result_owner = Owner::new_sig();
         let block_header = blk_hdr();
+        let workptr = workptr(&input_owner, block_header.id());
+        let vdf_diff = functions::vdf_difficulty(workptr.work_size().into(), block_header.vrf_t());
         let mut contract = JobContract::new(
-            workptr(&input_owner, block_header.id()),
+            workptr,
             block_header.clone(),
         );
         let result = resultptr(
             [99u8; 32],
             &result_owner,
-            block_header.vdf_diff(),
+            vdf_diff,
         );
 
         let key = result_owner.sign(&result.id());

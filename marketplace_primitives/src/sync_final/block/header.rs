@@ -1,5 +1,5 @@
 use borsh::{BorshDeserialize, BorshSerialize};
-use marketplace_helpers::{functions, objects::{CONTRACT_WHITEROOM_SIZE, ID, IdHash, VRF_T, WU}};
+use marketplace_helpers::{functions, objects::{ID, IdHash, VRF_T, WU}};
 
 use crate::{sync_final::block::BlockBody};
 
@@ -17,9 +17,6 @@ pub struct BlockHeader {
     // Total amount of gdc in chain
     total_gdc: WU,
 
-    // New average historical gdc created per block
-    average: WU,
-
     // VRF threshold
     vrf_t: VRF_T,
 }
@@ -36,8 +33,6 @@ impl BlockHeader {
 
             // Amount of new gdc
             total_gdc: WU::GDC(),
-            
-            average: WU::single(),
 
             // Max 255 bit number which means a
             // whiteroom selection probability of 1
@@ -51,17 +46,11 @@ impl BlockHeader {
         prev_header: &BlockHeader,
         body: &BlockBody, 
     ) -> Self {
-        let new_avg = functions::avg_wu(
-            body.total(),
-            prev_header.average() 
-        );
-
         Self {
             index: prev_header.index() + 1,
             ctr_merkle_root: body.root(),
             prev: prev_header.id(),
             total_gdc: body.total() + prev_header.total_gdc,
-            average: new_avg,
 
             // Calculate new VRF threshold 
             // as described in whitepaper.
@@ -80,26 +69,9 @@ impl BlockHeader {
         self.index
     }
 
-    // Get VDF Difficulty for blockheader
-    pub fn vdf_diff(&self) -> u64 {
-        // Work size is total work done on a job by
-        // a whiteroom committee divided by whiteroom committee size
-        let work_size = self.average / WU::try_from(CONTRACT_WHITEROOM_SIZE as u128).unwrap();
-
-        functions::vdf_difficulty(
-            work_size, 
-            self.vrf_t()
-        )
-    }
-
     // Get total amount of gdc in blockchain
     pub fn total_gdc(&self) -> WU {
         self.total_gdc
-    }
-
-    // Get average 
-    pub fn average(&self) -> WU {
-        self.average
     }
 
     // Get VRF threshold for current epoch
@@ -140,7 +112,6 @@ mod tests {
         assert_eq!(header.index(), 0);
         assert_eq!(header.prev(), [0u8; 32]);
         assert_eq!(header.total_gdc(), WU::GDC());
-        assert_eq!(header.average(), WU::single());
         assert_eq!(header.vrf_t(), [255u8; 32]);
     }
 
@@ -171,6 +142,5 @@ mod tests {
 
         assert_eq!(first, second);
         assert_eq!(first.id(), second.id());
-        assert_eq!(first.vdf_diff(), second.vdf_diff());
     }
 }
