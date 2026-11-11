@@ -1,0 +1,14 @@
+[package]
+name = "marketplace_node"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+marketplace_helpers = { path = "../marketplace_helpers", version = "0.1.0" }
+marketplace_p2p = { path = "../marketplace_p2p", version = "0.1.0" }
+marketplace_wallet = { path = "../marketplace_wallet", version = "0.1.0" }
+marketplace_primitives = { path = "../marketplace_primitives", version = "0.1.0" }
+marketplace_ledger = { path = "../marketplace_ledger", version = "0.1.0" }
+marketplace_worker = { path = "../marketplace_worker", version = "0.1.0" }
+marketplace_core = { path = "../marketplace_core", version = "0.1.0"}
+tokio = { version = "1", features = ["full"] }
