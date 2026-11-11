@@ -8,6 +8,7 @@
 use borsh::{BorshDeserialize, BorshSerialize};
 use marketplace_helpers::objects::WorkSize;
 use marketplace_wallet::Lock;
+use crate::Verify;
 use crate::par_exec::TxOptRef;
 use crate::helpers::objects::{ID, WorkAddr};
 
@@ -193,6 +194,11 @@ impl WorkPtr {
 }
 
 // Verify sturcture of work input
+impl Verify for WorkPtr {
+    fn verify(&self) -> marketplace_helpers::objects::AgentResult<()> {
+        Ok(())
+    }
+}
 
 // The verification of UTXOs is done by the state
 // when the workptr is passed through it.

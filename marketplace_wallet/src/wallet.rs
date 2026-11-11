@@ -10,6 +10,7 @@ use crate::{helpers::{functions, objects::{Hash, ID}}, owner::Key};
 /// # Wallet
 /// 
 /// `Wallet` is a single cryptographic key pair
+#[derive(Clone)]
 pub struct Wallet {
     key: Keypair
 }

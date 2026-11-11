@@ -47,6 +47,7 @@ use crate::{Wallet, helpers::{functions, objects::ID}};
 /// assert!(lock.unlock(&key, &msg).is_ok());
 /// ```
 /// 
+#[derive(Clone)]
 pub enum Owner {
     // Single sig containing pubkey hash
     SIG(Wallet),

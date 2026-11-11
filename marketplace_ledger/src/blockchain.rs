@@ -4,7 +4,7 @@ use marketplace_primitives::{
     par_exec::{Bill, Contract, TxOpt, TxOptRef, Whiteroom, WorkPtr}, sync_final::{Block, BlockBody, Validated, blockinfo::BlockInfo},
 };
 
-use std::{collections::HashMap, panic, path::Path};
+use std::{collections::HashMap, panic, path::Path, sync::{Mutex, MutexGuard, RwLock, RwLockReadGuard, RwLockWriteGuard}};
 
 use redb::{Database, Error, ReadableDatabase, ReadableTable, ReadableTableMetadata, TableDefinition};
 
@@ -41,14 +41,14 @@ const WHITEROOM_MAX: usize = functions::max_wr_size_from_expected(EXPECTED_VOTER
 // that can be used to build state
 pub struct Blockchain<B: Balances> {
     // Database
-    db: Database,
+    db: RwLock<Database>,
 
     // UTXO State
-    state: State<B>,
+    state: Mutex<State<B>>,
 
     // Store key value pair of
     // contract id and Contract to be stored
-    cache: Option<HashMap<ID, Contract>>,
+    cache: Mutex<HashMap<ID, Contract>>,
 }
 
 impl<B: Balances> Blockchain<B> {
@@ -113,23 +113,42 @@ impl<B: Balances> Blockchain<B> {
         Self::init_tables(&db)?;
 
         Ok(Self {
-            db,
-            state,
-            cache: Some(HashMap::new()),
+            db: RwLock::new(db),
+            state: Mutex::new(state),
+            cache: Mutex::new(HashMap::new()) ,
         })
+    }
+
+    /// Read from blockchain database 
+    pub fn db_read(&self) -> RwLockReadGuard<'_, Database> {
+        self.db.read().unwrap()
+    }
+
+    /// Write to blockchain database
+    pub fn db_write(&self) -> RwLockWriteGuard<'_, Database> {
+        self.db.write().unwrap()
+    }
+
+    /// Interact with state by locking it
+    pub fn state(&self) -> MutexGuard<'_, State<B>> {
+        self.state.lock().unwrap()
+    }
+
+    /// Intearct with cache by locking it
+    pub fn cache(&self) -> MutexGuard<'_, HashMap<ID, Contract>> {
+        self.cache.lock().unwrap()
     }
 }
 
 // Handle modifying block body
 impl<B: Balances> Blockchain<B> {
     /// Add a sub block to block body to be proposed
-    pub fn add_ctrs(&mut self, ctrs: Vec<Contract>) {
+    pub fn add_ctrs(&self, ctrs: Vec<Contract>) {
         // Cache should always have a vector because the cache should
         // only be in None state when ctrs are being moved, which is then 
         // immediately replaced. 
         // If cache is in None state, the cache is corrupted.
-        let cache = self.cache.as_mut()
-            .expect("Illegal: Cache should not be in None state");
+        let mut cache = self.cache();
 
         cache.extend(
             ctrs.into_iter()
@@ -139,22 +158,18 @@ impl<B: Balances> Blockchain<B> {
 
     // Get block body to be proposed in a new block
     // from cache
-    fn get_block_body(&mut self) -> BlockBody {
-        let ctrs = self.cache
-            .take()
-            .expect("Illegal: Cache should not be in None state");
-
-        self.cache = Some(HashMap::new());
+    fn get_block_body(&self) -> BlockBody {
+        let mut cache = self.cache();
 
         BlockBody::new(
-            ctrs.into_iter()
+            cache.drain()
                 .map(|(_, ctr)| ctr)
                 .collect()
         )
     }
 
     /// Return a new block to be proposed to the network
-    pub fn new_block(&mut self) -> Block {
+    pub fn new_block(&self) -> Block {
         let blockbody = self.get_block_body();
 
         // Get latest block in chain which acts as new block's prev block
@@ -166,32 +181,17 @@ impl<B: Balances> Blockchain<B> {
 
     /// Remove contract from cache if it exists
     /// and return
-    pub fn take_ctr(&mut self, id: ID) -> Option<Contract> {
-        let cache = self.cache.as_mut()
-            .expect("Illegal: Cache should not be in None state");
+    pub fn take_ctr(&self, id: ID) -> Option<Contract> {
+        let mut cache = self.cache();
 
         cache.remove(&id)
-    }
-
-    /// Get contract from cache if it exists
-    pub fn get_ctr(&self, id: &ID) -> Option<&Contract> {
-        let cache = self.cache
-            .as_ref()
-            .expect("Illegal: Cache should not be in None state");
-
-        cache.get(id)
     } 
-    
 }
 
 // Methods for UtxO state
 impl<B: Balances> Blockchain<B> {
-    pub fn state(&self) -> &State<B> {
-        &self.state
-    }
-
     // Update state with contracts in block
-    pub fn update_state_with_block(&mut self, block: &Block) -> AgentResult<()> {
+    pub fn update_state_with_block(&self, block: &Block) -> AgentResult<()> {
         for ctr in block.ctrs() {
             // Remove contract from cache
             // Given that all contracts must have been added to cache 
@@ -202,11 +202,11 @@ impl<B: Balances> Blockchain<B> {
             match ctr {
                 Contract::JOB(jobctr) => {
                     let tx = jobctr.get_tx()?;
-                    self.state.put_opts(&tx);
+                    self.state().put_opts(&tx);
                 },
                 Contract::TX(txctr) => {
                     for tx in txctr.get_txs() {
-                        self.state.put_opts(tx);
+                        self.state().put_opts(tx);
                     }
                 }
             }
@@ -221,12 +221,13 @@ impl<B: Balances> Blockchain<B> {
 
     // Try to take input UTXO's for jobcontracts
     pub fn get_workptr_utxos(
-        &mut self, 
+        &self, 
         workptr: &WorkPtr, 
         auth: &HashMap<ID, Key>
     ) -> AgentResult<Vec<(TxOptRef, TxOpt)>> {
         // Get goldcoin utxo list, which is the only currency that work can be done with
-        let balances = self.state.get_mut_coin_balance_list();
+        let mut state = self.state();
+        let balances = state.get_mut_coin_balance_list();
 
         // List of utxos
         let mut ref_opts: Vec<(TxOptRef, TxOpt)> = Vec::new();
@@ -259,10 +260,11 @@ impl<B: Balances> Blockchain<B> {
 
     // Return utxo taken by a job back to state
     pub fn revert_jobctr_utxos(
-        &mut self, 
+        &self, 
         utxos: Vec<(TxOptRef, TxOpt)>
     ) {
-        let balances = self.state.get_mut_coin_balance_list();
+        let mut state = self.state();
+        let balances = state.get_mut_coin_balance_list();
 
         for (utxo_ref, utxo) in utxos.into_iter().rev() {
             balances.put(utxo_ref, utxo);
@@ -271,7 +273,10 @@ impl<B: Balances> Blockchain<B> {
 
     // Subtracts transaction inputs from the global state
     // If inputs could not be found, a double spend error is assumed.
-    pub fn get_bill_utxos(&mut self, bill: &Bill, auth: &HashMap<ID, Key>) -> AgentResult<()> {
+    pub fn get_bill_utxos(&self, bill: &Bill, auth: &HashMap<ID, Key>) -> AgentResult<()> {
+        // Get mutable state
+        let mut state = self.state();
+
         // Get the referenced utxos for each transaction.
         // If any issues occur, rollback the removed
 
@@ -281,7 +286,7 @@ impl<B: Balances> Blockchain<B> {
 
         for tx in bill.get_txs().iter() {
             // Try to get ref opts for txs
-            match self.state.get_ref_opts(tx, &bill.id(), auth) {
+            match state.get_ref_opts(tx, &bill.id(), auth) {
                 Ok(ref_opts) => {
                     // TODO: Check ipts owners consented
                     // Store tx opts
@@ -290,7 +295,7 @@ impl<B: Balances> Blockchain<B> {
                 Err(e) => {
                     // Revert state changes
                     for (tx, ref_opts) in tx_ref_opts.into_iter() {
-                        self.state.revert_ref_opts(tx, ref_opts);
+                        state.revert_ref_opts(tx, ref_opts);
                     }
                     return Err(e)
                 }
@@ -306,7 +311,9 @@ impl<B: Balances> Blockchain<B> {
 impl<B: Balances> Blockchain<B> {
     /// Get block from index
     pub fn get_block_by_id(&self, id: &[u8]) -> StdResult<Option<Block>> {
-        let read_txn = self.db.begin_read()?;
+        let db = self.db.read().unwrap();
+
+        let read_txn = db.begin_read()?;
 
         // Get Block option indicating absence or presence of the block.
         let block_option = read_txn.open_table(BLOCKS)?
@@ -324,7 +331,7 @@ impl<B: Balances> Blockchain<B> {
 
     /// Get auth by index
     pub fn get_auth_by_index(&self, index: Epoch) -> StdResult<Option<Whiteroom<Validated, WHITEROOM_MAX>>> {
-        let read_txn = self.db.begin_read()?;
+        let read_txn = self.db_read().begin_read()?;
 
         let auth_option = read_txn.open_table(AUTHS)?
             .get(index)?;
@@ -340,7 +347,7 @@ impl<B: Balances> Blockchain<B> {
 
     /// Get blockchain genesis block
     pub fn genesis_block(&self) -> StdResult<Block> {
-        let read_txn = self.db.begin_read()?;
+        let read_txn = self.db_read().begin_read()?;
 
         // Get genesis header, which should exist
         // or panic
@@ -368,7 +375,7 @@ impl<B: Balances> Blockchain<B> {
     /// 
     /// It also returns None for indexes not found in the blockchain DB
     pub fn get_blockinfo_by_index(&self, index: Epoch) -> StdResult<Option<BlockInfo>> {
-        let read_txn = self.db.begin_read()?;
+        let read_txn = self.db_read().begin_read()?;
 
         // Genesis block info does not exist
         if index == 0 {
@@ -397,7 +404,7 @@ impl<B: Balances> Blockchain<B> {
 
     // Latest blockinfo entry in the blockchain
     fn latest_epoch_entry(&self) -> StdResult<(Epoch, ID)>  {
-        let indexes = self.db
+        let indexes = self.db_read()
             .begin_read()?
             .open_table(INDEXES)?;
 
@@ -444,7 +451,7 @@ impl<B: Balances> Blockchain<B> {
 
     /// Total goldcoin in chain
     pub fn total_gdc(&self) -> StdResult<WU> {
-        let metadata = self.db
+        let metadata = self.db_read()
             .begin_read()?
             .open_table(METADATA)?;
 
@@ -487,12 +494,12 @@ impl<B: Balances> Blockchain<B> {
 // Setter methods
 impl<B: Balances> Blockchain<B> {
     // Add to file
-    fn add_to_db(&mut self, blockinfo: BlockInfo) -> StdResult<()> {
+    fn add_to_db(&self, blockinfo: BlockInfo) -> StdResult<()> {
         // Sepearte blockinfo into block and auth
         let (block, auth) = blockinfo.destroy();
         let index = block.header().index();
 
-        let write_txn = self.db.begin_write()?;
+        let write_txn = self.db_write().begin_write()?;
 
         {
             // Update total gdc in metadata
@@ -695,19 +702,19 @@ use marketplace_wallet::Owner;
     fn cached_contracts_are_consumed_by_new_block() -> StdResult<()> {
         let path = test_db("cached_contracts");
         let state: State<state::DefaultBalances> = State::new();
-        let mut chain = Blockchain::init(&path, state)?;
+        let chain = Blockchain::init(&path, state)?;
         let contract = Contract::genesis();
         let id = contract.id();
         chain.add_ctrs(vec![contract]);
 
-        assert!(chain.get_ctr(&id).is_some());
+        assert!(chain.cache().get(&id).is_some());
 
         let block = chain.new_block();
 
         assert_eq!(block.index(), 1);
         assert_eq!(block.header().prev(), Block::genesis().id());
         assert_eq!(block.ctrs().len(), 1);
-        assert!(chain.get_ctr(&id).is_none());
+        assert!(chain.cache().get(&id).is_none());
         assert!(chain.new_block().ctrs().is_empty());
 
         fs::remove_file(path)?;

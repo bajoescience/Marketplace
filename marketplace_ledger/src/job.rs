@@ -1,26 +1,26 @@
-use std::{collections::{HashMap, HashSet}, format};
+use std::{collections::HashSet, format, sync::Mutex};
+use dashmap::{DashMap, mapref::one::{Ref, RefMut}};
 
 use marketplace_helpers::{functions, objects::{AgentResult, ID}};
 use marketplace_primitives::par_exec::{Contract, JobContract, TxOpt, TxOptRef};
-
 /// # Jobs
 /// 
 /// The `Jobs` is the Live State of the marketplace where live jobs are stored and updated.
 pub struct Jobs {
     // This is where jobs are kept
     // Each job contract is referenced by it's work pointer id
-    jobs: HashMap<ID, (JobContract, Vec<(TxOptRef, TxOpt)>)>,
+    jobs: DashMap<ID, (JobContract, Vec<(TxOptRef, TxOpt)>)>,
 
     // finalized jobs to be stored in mempool
     // pending block inclusion
-    ready_jobs: HashSet<ID>,
+    ready_jobs: Mutex<HashSet<ID>>,
 }
 
 impl Jobs {
     pub fn new() -> Self {
         Self {
-            jobs: HashMap::new(),
-            ready_jobs: HashSet::new(),
+            jobs: DashMap::new(),
+            ready_jobs: Mutex::new(HashSet::new()),
         }
     }
 }
@@ -29,15 +29,15 @@ impl Jobs {
 impl Jobs {
     /// Get the `JobContracts` that are ready to be finalized
     /// and added to a new `Block`
-    pub fn get_pending_jobs(&mut self) -> Vec<Contract> {
+    pub fn get_pending_jobs(&self) -> Vec<Contract> {
         let mut ctrs = Vec::new();
 
         // Get jobscontract from Hashmap
         // using it's id in ready_jobs list
-        for ctr_id in self.ready_jobs.drain() {
+        for ctr_id in self.ready_jobs.lock().unwrap().drain() {
             // Collect job contracts and drop utxos given that
             // the job has been finalized
-            let (jobctr, _) = self.jobs.remove(&ctr_id)
+            let (_, (jobctr, _)) = self.jobs.remove(&ctr_id)
                 .expect("Illegal: Jobcontract not found in jobs yet it exists as finalized");
 
 
@@ -48,38 +48,40 @@ impl Jobs {
     }
 
     /// Take ownership of a `Job` from the `Jobs`
-    pub fn take_job(&mut self, id: &ID) -> Option<(JobContract, Vec<(TxOptRef, TxOpt)>)> {
-        let (jobctr, utxos) = self.jobs.remove(id)?;
+    pub fn take_job(&self, id: &ID) -> Option<(JobContract, Vec<(TxOptRef, TxOpt)>)> {
+        let (_, (jobctr, utxos)) = self.jobs.remove(id)?;
 
         // Remove the jobctr id if it was in the ready contract set
-        self.ready_jobs.remove(id);
+        self.ready_jobs.lock().unwrap().remove(id);
 
         Some((jobctr, utxos))
     }
 
     /// Get jobctr ref from jobs
-    pub fn get_job(&self, id: &ID) -> AgentResult<&JobContract> {
+    pub fn get_job(&self, id: &ID) -> AgentResult<Ref<'_, ID, (JobContract, Vec<(TxOptRef, TxOpt)>)>> {
         // Check if contract exists
-        let Some((jobctr, _)) = self.jobs.get(id) else {
+        let Some(refs) = self.jobs.get(id) else {
             return Err(format!(
                 "Error: Job with work id {} does not exist",
                 functions::from_bytes(id)
             ))
         };
 
-        Ok(jobctr)
+        Ok(refs)
     }
 
-    pub fn get_mut_job(&mut self, id: &ID) -> AgentResult<&mut JobContract> {
+    pub fn get_mut_job(&self, id: &ID) -> AgentResult<
+        RefMut<'_, ID, (JobContract, Vec<(TxOptRef, TxOpt)>)>
+    > {
         // Check if contract exists
-        let Some((jobctr, _)) = self.jobs.get_mut(id) else {
+        let Some(refs) = self.jobs.get_mut(id) else {
             return Err(format!(
                 "Error: Job with work id {} does not exist",
                 functions::from_bytes(id)
             ))
         };
 
-        Ok(jobctr)
+        Ok(refs)
     }
 }
 
@@ -93,14 +95,14 @@ impl Jobs {
     /// ready to be finalized.
     /// 
     /// The same is not true for a `Job Contract`.
-    pub fn add_contract(&mut self, jobctr: JobContract, utxos: Vec<(TxOptRef, TxOpt)>) {
+    pub fn add_contract(&self, jobctr: JobContract, utxos: Vec<(TxOptRef, TxOpt)>) {
         let id = jobctr.id();
 
         self.jobs.insert(id, (jobctr, utxos));
     }
 
-    pub fn handle_consensus(&mut self, id: ID) {
-        self.ready_jobs.insert(id);
+    pub fn handle_consensus(&self, id: ID) {
+        self.ready_jobs.lock().unwrap().insert(id);
     }
 }
 

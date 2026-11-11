@@ -32,7 +32,7 @@
 //! `Block` message
 
 mod epoch_state;
-use std::{any::{Any, TypeId}, cmp::Ordering, collections::HashMap, format, todo, vec};
+use std::{any::{Any, TypeId}, cmp::Ordering, collections::HashMap, format, sync::{Mutex, MutexGuard}, todo, vec};
 
 use marketplace_helpers::{functions, objects::{AgentResult, Epoch, ID, IdHash}};
 use marketplace_ledger::{Balances, Blockchain, Jobs, Mempool, State};
@@ -49,7 +49,7 @@ use marketplace_worker::Worker;
 /// The `Core` data structure methods handle incoming messages from the network
 /// by validating the messages, and handing them over to the appropiate 
 /// state data structure (block chain or mempool) to handle.
-pub struct Core<B: Balances, W: Worker> {
+pub struct Core<B: Balances> {
     // Blockchain representing dead state
     chain: Blockchain<B>,
 
@@ -57,10 +57,9 @@ pub struct Core<B: Balances, W: Worker> {
     jobs: Jobs,
 
     // Mempool containing finalized contracts
-    mempool: Mempool,
+    mempool: Mutex<Mempool>,
 
     // Worker that executes a VDF, and a Job
-    worker: Option<W>,
 
     // Node authentication
     owner: Owner,
@@ -70,7 +69,7 @@ pub struct Core<B: Balances, W: Worker> {
     // epoch_state: Option<Box<dyn EpochState>>
 }
 
-impl<B: Balances, W: Worker> Core<B, W> {
+impl<B: Balances> Core<B> {
     /// Initialize a new `Core` object
     /// which comprises of initializing the 
     /// `Live`, `Dead`, and Financial states.
@@ -81,7 +80,7 @@ impl<B: Balances, W: Worker> Core<B, W> {
     /// 
     /// The `owner` is used to authenticate a node, and it is used to vote
     /// as proposer or validator of blocks on the network.
-    pub fn new(worker: Option<W>, chain: Blockchain<B>, owner: Owner) -> Self {
+    pub fn new(chain: Blockchain<B>, owner: Owner) -> Self {
         // Initialize the blockchain as the dead state
 
         // TODO: Update chain with blocks from network first
@@ -89,7 +88,7 @@ impl<B: Balances, W: Worker> Core<B, W> {
 
         // Initialize new mempool to act as live state
         // keeping track of finalized contracts.
-        let mempool = Mempool::new();
+        let mempool = Mutex::new(Mempool::new());
 
         // Handle active jobs 
         let jobs = Jobs::new();
@@ -100,14 +99,18 @@ impl<B: Balances, W: Worker> Core<B, W> {
             chain,
             jobs,
             mempool,
-            worker,
             owner,
         }
     }
 
     /// Access Financial State of the network
-    pub fn utxo_state(&self) -> &State<B> {
+    pub fn utxo_state(&self) -> MutexGuard<'_, State<B>> {
         self.chain.state()
+    }
+
+    /// Thread locks mempool to access it
+    pub fn mempool(&self) -> MutexGuard<'_, Mempool> {
+        self.mempool.lock().unwrap()
     }
 
     /// Handle `Messages` from the network and update `Core` state based on the type of message.
@@ -116,7 +119,7 @@ impl<B: Balances, W: Worker> Core<B, W> {
     /// so that the caller does not resend the message to it's peers.
     /// 
     /// The objects in the `Messages` passed to this function must be verifiable (`Verify` trait)
-    pub async fn handle_message<M>(&mut self, message: &Message<M>) -> AgentResult<()>
+    pub async fn handle_message<M>(&self, message: &Message<M>) -> AgentResult<()>
     where M: 'static + Verify + IdHash
     {
         // Collect payload and signatures from the message
@@ -184,7 +187,7 @@ impl<B: Balances, W: Worker> Core<B, W> {
 
 
 // Handle network messages
-impl<B: Balances, W: Worker> Core<B, W> {
+impl<B: Balances> Core<B> {
     /// ## Work Pointer Handler
     /// 
     /// A `Work Pointer` is sent to the network to initialize a `Job` similar to a Job post.
@@ -204,7 +207,7 @@ impl<B: Balances, W: Worker> Core<B, W> {
     /// 
     ///   If the `Work Pointer` is expired, the `Job Contract` is stored in the mempool, but never executed. 
     ///   The node simply waits on the results of the `Job`. God bless.
-    fn handle_job(&mut self, workptr: &WorkPtr, auth: &HashMap<ID, Key>) -> AgentResult<()> {
+    fn handle_job(&self, workptr: &WorkPtr, auth: &HashMap<ID, Key>) -> AgentResult<()> {
         // Fetch blockheader from blockchain
         let blk_hdr = workptr.blk_hdr();
 
@@ -245,7 +248,7 @@ impl<B: Balances, W: Worker> Core<B, W> {
     /// that returns an `Error` if any problem occurs. (See Mempool) 
     /// 
     /// If result pointer, revert job. 
-    fn handle_result_ptr(&mut self, result: &ResultPtr, auth: &HashMap<ID, Key>) -> AgentResult<()> {
+    fn handle_result_ptr(&self, result: &ResultPtr, auth: &HashMap<ID, Key>) -> AgentResult<()> {
         // Verify result pointer ownership
         let result_owner = result.witness();
         let Some(key) = auth.get(&result_owner.id()) else {
@@ -264,7 +267,8 @@ impl<B: Balances, W: Worker> Core<B, W> {
         // Update job
         // this is put in a new scope due to borrowing rules!
         {
-            let job = self.jobs.get_mut_job(&job_id)?;
+            let mut ref_job = self.jobs.get_mut_job(&job_id)?;
+            let (job, _) = ref_job.value_mut();
 
             // Add result pointer to job
             // and the auth object
@@ -293,7 +297,7 @@ impl<B: Balances, W: Worker> Core<B, W> {
     }
 
     // Handle bill
-    fn handle_bill(&mut self, bill: &Bill, auth: &HashMap<ID, Key>) -> AgentResult<()> {
+    fn handle_bill(&self, bill: &Bill, auth: &HashMap<ID, Key>) -> AgentResult<()> {
         // Get each transaction inputs from the 
         self.chain.get_bill_utxos(bill, auth)?;
 
@@ -308,9 +312,10 @@ impl<B: Balances, W: Worker> Core<B, W> {
     }
 
     // TODO: Handle received block
-    fn handle_proposer(&mut self, proposer: &Proposer, auth: &HashMap<ID, Key>) -> AgentResult<()> {
+    fn handle_proposer(&self, proposer: &Proposer, auth: &HashMap<ID, Key>) -> AgentResult<()> {
         // Get subusers and blockheader
         let subusers = self.get_subusers(proposer)?;
+        let mut mempool = self.mempool();
 
         // Subusers must be greater than 0
         if subusers > 0 {
@@ -318,9 +323,9 @@ impl<B: Balances, W: Worker> Core<B, W> {
             // with the highest new gdc extension to the blockchain
             // Equality of gdc is handled by this method, such that only for
             // proposals containing the same block does the method return Ordering::Equal.
-            let Ordering::Greater = self.mempool.cmp_proposers(proposer) else {
+            let Ordering::Greater = self.mempool().cmp_proposers(proposer) else {
                 // Update subuser count
-                self.mempool.update_subusers(subusers);
+                mempool.update_subusers(subusers);
                 return Ok(())
             };
 
@@ -334,7 +339,7 @@ impl<B: Balances, W: Worker> Core<B, W> {
 
 
             // Add proposal to mempool and update subusers
-            self.mempool.add_proposal(proposal, subusers);
+            mempool.add_proposal(proposal, subusers);
 
             // If subusers count is more than threshold, vote on block
             // as validator
@@ -347,9 +352,10 @@ impl<B: Balances, W: Worker> Core<B, W> {
     }
 
     // Handle received validator
-    fn handle_validator(&mut self, validator: &Validator, auth: &HashMap<ID, Key>) -> AgentResult<()> {
+    fn handle_validator(&self, validator: &Validator, auth: &HashMap<ID, Key>) -> AgentResult<()> {
         // TODO: Get subusers and blockheader
         let subusers = self.get_subusers(validator)?;
+        let mut mempool = self.mempool();
 
         // Subusers must be greater than 0
         if subusers > 0 {
@@ -357,7 +363,7 @@ impl<B: Balances, W: Worker> Core<B, W> {
             let validated = Validated::new(validator.clone(), subusers, auth.clone());
 
             // Add validated to mempool and update subusers
-            self.mempool.add_validator(validated)?;
+            mempool.add_validator(validated)?;
 
             // If subusers count is more than threshold, vote on block
             // as validator
@@ -374,10 +380,11 @@ impl<B: Balances, W: Worker> Core<B, W> {
 }
 
 // Handle methods for blocks
-impl<T: Balances, W: Worker> Core<T, W> {
+impl<T: Balances> Core<T> {
     /// Validate block, and ensure every contract is valid, and can be gotten from state
-    pub fn validate_block(&mut self, block: &Block) -> AgentResult<()> {
+    pub fn validate_block(&self, block: &Block) -> AgentResult<()> {
         // TODO: Check block index and match against local blockchain
+        let cache = self.chain.cache();
 
         for ctr in block.iter() {
             // Verify contract
@@ -386,7 +393,7 @@ impl<T: Balances, W: Worker> Core<T, W> {
             // If contract exists in cache, the contract 
             // is already valid with respect to utxo state.
             // Move on!
-            let None = self.chain.get_ctr(&ctr.id()) else {
+            let None = cache.get(&ctr.id()) else {
                 continue;
             };
 
@@ -465,9 +472,15 @@ impl<T: Balances, W: Worker> Core<T, W> {
     /// Attempt to vote an a `Block` that has been observed
     /// to be the highest new gdc addition to the chain
     /// by sending it's `BlockHeader` to the network as a finalized `Block`
-    pub fn finalize_block(&mut self) -> AgentResult<()> {
+    fn finalize_block(&mut self) -> AgentResult<()> {
         // Get proposer from mempool to finalize
-        let Some(proposal) = self.mempool.get_proposal_to_finalize() else {
+        let proposal_opt;
+        {
+            let mut mempool = self.mempool();
+            proposal_opt = mempool.get_proposal_to_finalize();
+        }
+
+        let Some(proposal) = proposal_opt else {
             return Err(format!(
                 "Error: No proposal to finalize"
             ))
@@ -494,7 +507,7 @@ impl<T: Balances, W: Worker> Core<T, W> {
     }
 
     /// Get subusers using VRF ouptput
-    pub fn get_subusers(&self, voter: &impl Voter) -> AgentResult<u64> {
+    fn get_subusers(&self, voter: &impl Voter) -> AgentResult<u64> {
         // User gdc balance
         let user_amount = self.utxo_state().get_gdc_balance(voter.owner());
 
@@ -512,7 +525,7 @@ impl<T: Balances, W: Worker> Core<T, W> {
 }
 
 // Handle async methods that can be spawned as tasks
-impl<T: Balances, W: Worker> Core<T, W> {
+impl<T: Balances> Core<T> {
     /// This is the action to be taken every epoch by the marketplace node.
     /// 
     /// This method takes a list of finalized `Contracts` from the network

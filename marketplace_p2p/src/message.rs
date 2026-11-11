@@ -1,4 +1,4 @@
-use std::{collections::HashMap, format};
+use std::{collections::{HashMap, hash_map::Entry}, format};
 
 use marketplace_helpers::objects::{AgentResult, ID, IdHash};
 use marketplace_wallet::{Key, Lock};
@@ -26,5 +26,23 @@ impl<T: IdHash> Message<T> {
         };
 
         lock.unlock(key, &payload.id())
+    }
+
+    pub fn new(payload: T) -> Self {
+        Self { 
+            payload, 
+            auth: HashMap::new() 
+        }
+    }
+
+    pub fn add_auth(&mut self, lock: Lock, key: Key) {
+        match self.auth.entry(lock.id()) {
+            Entry::Vacant(entry) => {
+                entry.insert(key);
+            },
+            Entry::Occupied(_) => {
+                
+            },  
+        }
     }
 }
