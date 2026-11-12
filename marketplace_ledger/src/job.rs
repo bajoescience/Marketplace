@@ -58,7 +58,9 @@ impl Jobs {
     }
 
     /// Get jobctr ref from jobs
-    pub fn get_job(&self, id: &ID) -> AgentResult<Ref<'_, ID, (JobContract, Vec<(TxOptRef, TxOpt)>)>> {
+    pub fn get_job(&self, id: &ID) -> AgentResult<
+        Ref<'_, ID, (JobContract, Vec<(TxOptRef, TxOpt)>)>
+    > {
         // Check if contract exists
         let Some(refs) = self.jobs.get(id) else {
             return Err(format!(
@@ -146,7 +148,7 @@ mod tests {
         let owner = Owner::new_sig();
         let job = job_contract(&owner, 5);
         let id = job.id();
-        let mut jobs = Jobs::new();
+        let jobs = Jobs::new();
 
         jobs.add_contract(job, Vec::new());
 
@@ -161,7 +163,7 @@ mod tests {
         let owner = Owner::new_sig();
         let job = job_contract(&owner, 6);
         let id = job.id();
-        let mut jobs = Jobs::new();
+        let jobs = Jobs::new();
 
         jobs.add_contract(job, Vec::new());
         jobs.handle_consensus(id);
@@ -180,7 +182,7 @@ mod tests {
         let owner = Owner::new_sig();
         let job = job_contract(&owner, 7);
         let id = job.id();
-        let mut jobs = Jobs::new();
+        let jobs = Jobs::new();
 
         jobs.add_contract(job, Vec::new());
         jobs.handle_consensus(id);

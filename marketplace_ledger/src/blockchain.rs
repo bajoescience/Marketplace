@@ -29,7 +29,7 @@ const AUTHS: TableDefinition<Epoch, &[u8]> = TableDefinition::new("auths");
 /// total goldcoin in chain ("gdc": [u8; 16])
 const METADATA: TableDefinition<&str, &[u8]> = TableDefinition::new("metadata");
 
-use marketplace_wallet::{Key, voting::EXPECTED_VOTERS};
+use marketplace_wallet::{Key, Lock, voting::EXPECTED_VOTERS};
 
 use crate::{Balances, State, state};
 
@@ -190,6 +190,12 @@ impl<B: Balances> Blockchain<B> {
 
 // Methods for UtxO state
 impl<B: Balances> Blockchain<B> {
+    // Get gdc_balance
+    pub fn gdc_balance(&self, owner: Lock) -> WU {
+        let state = self.state();
+        state.get_gdc_balance(owner)
+    } 
+
     // Update state with contracts in block
     pub fn update_state_with_block(&self, block: &Block) -> AgentResult<()> {
         for ctr in block.ctrs() {
@@ -311,9 +317,10 @@ impl<B: Balances> Blockchain<B> {
 impl<B: Balances> Blockchain<B> {
     /// Get block from index
     pub fn get_block_by_id(&self, id: &[u8]) -> StdResult<Option<Block>> {
-        let db = self.db.read().unwrap();
-
-        let read_txn = db.begin_read()?;
+        let read_txn;
+        {
+            read_txn = self.db_read().begin_read()?;
+        }
 
         // Get Block option indicating absence or presence of the block.
         let block_option = read_txn.open_table(BLOCKS)?
@@ -331,7 +338,10 @@ impl<B: Balances> Blockchain<B> {
 
     /// Get auth by index
     pub fn get_auth_by_index(&self, index: Epoch) -> StdResult<Option<Whiteroom<Validated, WHITEROOM_MAX>>> {
-        let read_txn = self.db_read().begin_read()?;
+        let read_txn;
+        {
+            read_txn = self.db_read().begin_read()?;
+        }
 
         let auth_option = read_txn.open_table(AUTHS)?
             .get(index)?;
@@ -347,7 +357,10 @@ impl<B: Balances> Blockchain<B> {
 
     /// Get blockchain genesis block
     pub fn genesis_block(&self) -> StdResult<Block> {
-        let read_txn = self.db_read().begin_read()?;
+        let read_txn; 
+        {
+            read_txn = self.db_read().begin_read()?;
+        }
 
         // Get genesis header, which should exist
         // or panic
@@ -375,7 +388,10 @@ impl<B: Balances> Blockchain<B> {
     /// 
     /// It also returns None for indexes not found in the blockchain DB
     pub fn get_blockinfo_by_index(&self, index: Epoch) -> StdResult<Option<BlockInfo>> {
-        let read_txn = self.db_read().begin_read()?;
+        let read_txn;
+        {
+            read_txn = self.db_read().begin_read()?;
+        }
 
         // Genesis block info does not exist
         if index == 0 {
@@ -404,9 +420,12 @@ impl<B: Balances> Blockchain<B> {
 
     // Latest blockinfo entry in the blockchain
     fn latest_epoch_entry(&self) -> StdResult<(Epoch, ID)>  {
-        let indexes = self.db_read()
-            .begin_read()?
-            .open_table(INDEXES)?;
+        let indexes;
+        {
+            indexes = self.db_read()
+                .begin_read()?
+                .open_table(INDEXES)?;
+        }
 
         // Epoch table must at least contain genesis block id for epoch 0.
         let (index, block_id_bytes) = indexes.last()?
@@ -451,9 +470,12 @@ impl<B: Balances> Blockchain<B> {
 
     /// Total goldcoin in chain
     pub fn total_gdc(&self) -> StdResult<WU> {
-        let metadata = self.db_read()
-            .begin_read()?
-            .open_table(METADATA)?;
+        let metadata;
+        {
+            metadata = self.db_read()
+                .begin_read()?
+                .open_table(METADATA)?;
+        }
 
         // "gdc" should be defined in the db
         // as part of initialization

@@ -35,7 +35,7 @@ mod epoch_state;
 use std::{any::{Any, TypeId}, cmp::Ordering, collections::HashMap, format, sync::{Mutex, MutexGuard}, todo, vec};
 
 use marketplace_helpers::{functions, objects::{AgentResult, Epoch, ID, IdHash}};
-use marketplace_ledger::{Balances, Blockchain, Jobs, Mempool, State};
+use marketplace_ledger::{Balances, Blockchain, Jobs, Mempool};
 use marketplace_p2p::Message;
 use marketplace_primitives::{Verify, par_exec::{Bill, Contract, JobContract, ResultPtr, TxContract, WorkPtr}, sync_final::{Block, Proposal, Proposer, Validated, Validator, voter::Voter}};
 use marketplace_wallet::{Key, Owner, voting};
@@ -101,11 +101,6 @@ impl<B: Balances> Core<B> {
             mempool,
             owner,
         }
-    }
-
-    /// Access Financial State of the network
-    pub fn utxo_state(&self) -> MutexGuard<'_, State<B>> {
-        self.chain.state()
     }
 
     /// Thread locks mempool to access it
@@ -315,15 +310,17 @@ impl<B: Balances> Core<B> {
     fn handle_proposer(&self, proposer: &Proposer, auth: &HashMap<ID, Key>) -> AgentResult<()> {
         // Get subusers and blockheader
         let subusers = self.get_subusers(proposer)?;
-        let mut mempool = self.mempool();
 
         // Subusers must be greater than 0
         if subusers > 0 {
+            // Lock mempool
+            let mut mempool = self.mempool();
+
             // Proposer should be accepted if it contains the block 
             // with the highest new gdc extension to the blockchain
             // Equality of gdc is handled by this method, such that only for
             // proposals containing the same block does the method return Ordering::Equal.
-            let Ordering::Greater = self.mempool().cmp_proposers(proposer) else {
+            let Ordering::Greater = mempool.cmp_proposers(proposer) else {
                 // Update subuser count
                 mempool.update_subusers(subusers);
                 return Ok(())
@@ -355,10 +352,12 @@ impl<B: Balances> Core<B> {
     fn handle_validator(&self, validator: &Validator, auth: &HashMap<ID, Key>) -> AgentResult<()> {
         // TODO: Get subusers and blockheader
         let subusers = self.get_subusers(validator)?;
-        let mut mempool = self.mempool();
 
         // Subusers must be greater than 0
         if subusers > 0 {
+            // Lock mempool
+            let mut mempool = self.mempool();
+
             // Create new validated struct
             let validated = Validated::new(validator.clone(), subusers, auth.clone());
 
@@ -476,8 +475,7 @@ impl<T: Balances> Core<T> {
         // Get proposer from mempool to finalize
         let proposal_opt;
         {
-            let mut mempool = self.mempool();
-            proposal_opt = mempool.get_proposal_to_finalize();
+            proposal_opt = self.mempool().get_proposal_to_finalize();
         }
 
         let Some(proposal) = proposal_opt else {
@@ -509,7 +507,7 @@ impl<T: Balances> Core<T> {
     /// Get subusers using VRF ouptput
     fn get_subusers(&self, voter: &impl Voter) -> AgentResult<u64> {
         // User gdc balance
-        let user_amount = self.utxo_state().get_gdc_balance(voter.owner());
+        let user_amount = self.chain.gdc_balance(voter.owner());
 
         // User total currency
         let total_currency = self.chain
@@ -544,6 +542,16 @@ impl<T: Balances> Core<T> {
 
     /// Handle Synchronous finalization
     pub fn handle_sync_final(&mut self) {
-        // 
+        // Wait for epoch time
+
+        // Handle epoch
+
+        // Prepare a new block
+
+        // Wait time or check if proposal full
+
+        // Validate proposal
+
+        // Wait until completion
     }
 }

@@ -344,7 +344,7 @@ use crate::wallet::Wallet;
 
     // Whiteroom Sig
     #[test]
-    fn whiteroom_sig() {
+    fn whiteroom_sig() -> AgentResult<()> {
         // Whiteroom owner
         let wr_owner = Owner::new_sig();
 
@@ -352,7 +352,8 @@ use crate::wallet::Wallet;
         let wr_lock = wr_owner.as_wr_lock();
 
         // Wallet signs message
-        wr_owner.sign(&message());
+        let key = wr_owner.sign(&message());
+        wr_lock.unlock(&key, &message().id())
     }
 
     // Single sig
