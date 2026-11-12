@@ -352,7 +352,7 @@ use crate::wallet::Wallet;
         let wr_lock = wr_owner.as_wr_lock();
 
         // Wallet signs message
-        let key = wr_owner.sign(&message());
+        let key = wr_owner.sign(&message().id());
         wr_lock.unlock(&key, &message().id())
     }
 
