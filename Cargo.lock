@@ -1612,6 +1612,7 @@ dependencies = [
  "marketplace_wallet",
  "marketplace_worker",
  "redb",
+ "tokio",
 ]
 
 [[package]]

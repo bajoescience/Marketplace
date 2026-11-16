@@ -32,14 +32,15 @@
 //! `Block` message
 
 mod epoch_state;
-use std::{any::{Any, TypeId}, cmp::Ordering, collections::HashMap, format, sync::{Mutex, MutexGuard}, todo, vec};
+use std::{any::{Any, TypeId}, cmp::Ordering, collections::HashMap, format, time::Duration, todo, vec};
 
 use marketplace_helpers::{functions, objects::{AgentResult, Epoch, ID, IdHash}};
 use marketplace_ledger::{Balances, Blockchain, Jobs, Mempool};
 use marketplace_p2p::Message;
-use marketplace_primitives::{Verify, par_exec::{Bill, Contract, JobContract, ResultPtr, TxContract, WorkPtr}, sync_final::{Block, Proposal, Proposer, Validated, Validator, voter::Voter}};
+use marketplace_primitives::{Verify, par_exec::{Bill, Contract, JobContract, ResultPtr, TxContract, WorkPtr}, sync_final::{Block, Proposal, Proposer, Validated, Validator, voter::{Voter, validator}}};
 use marketplace_wallet::{Key, Owner, voting};
 use marketplace_worker::Worker;
+use tokio::{time};
 
 /// This is the `Core` data structure that manages the state of the Marketplace node.
 /// 
@@ -57,7 +58,7 @@ pub struct Core<B: Balances> {
     jobs: Jobs,
 
     // Mempool containing finalized contracts
-    mempool: Mutex<Mempool>,
+    mempool: Mempool,
 
     // Worker that executes a VDF, and a Job
 
@@ -88,7 +89,7 @@ impl<B: Balances> Core<B> {
 
         // Initialize new mempool to act as live state
         // keeping track of finalized contracts.
-        let mempool = Mutex::new(Mempool::new());
+        let mempool = Mempool::new();
 
         // Handle active jobs 
         let jobs = Jobs::new();
@@ -101,11 +102,6 @@ impl<B: Balances> Core<B> {
             mempool,
             owner,
         }
-    }
-
-    /// Thread locks mempool to access it
-    pub fn mempool(&self) -> MutexGuard<'_, Mempool> {
-        self.mempool.lock().unwrap()
     }
 
     /// Handle `Messages` from the network and update `Core` state based on the type of message.
@@ -157,7 +153,7 @@ impl<B: Balances> Core<B> {
             // TODO: Change the unwrap to handle error without panicking!
             let proposer = any_payload.downcast_ref::<Proposer>().unwrap();
 
-            self.handle_proposer(proposer, auth)
+            self.handle_proposer(proposer, auth).await
         }
 
         // Handle Block validator payload
@@ -165,7 +161,7 @@ impl<B: Balances> Core<B> {
             // TODO: Change the unwrap to handle error without panicking!
             let validator = any_payload.downcast_ref::<Validator>().unwrap();
 
-            self.handle_validator(validator, auth)
+            self.handle_validator(validator, auth).await
         }
 
         // TODO: Handle more types of network messages
@@ -307,15 +303,14 @@ impl<B: Balances> Core<B> {
     }
 
     // TODO: Handle received block
-    fn handle_proposer(&self, proposer: &Proposer, auth: &HashMap<ID, Key>) -> AgentResult<()> {
+    async fn handle_proposer(&self, proposer: &Proposer, auth: &HashMap<ID, Key>) -> AgentResult<()> {
         // Get subusers and blockheader
         let subusers = self.get_subusers(proposer)?;
 
+        let mempool = &self.mempool;
+
         // Subusers must be greater than 0
         if subusers > 0 {
-            // Lock mempool
-            let mut mempool = self.mempool();
-
             // Proposer should be accepted if it contains the block 
             // with the highest new gdc extension to the blockchain
             // Equality of gdc is handled by this method, such that only for
@@ -349,20 +344,22 @@ impl<B: Balances> Core<B> {
     }
 
     // Handle received validator
-    fn handle_validator(&self, validator: &Validator, auth: &HashMap<ID, Key>) -> AgentResult<()> {
+    async fn handle_validator(&self, validator: &Validator, auth: &HashMap<ID, Key>) -> AgentResult<()> {
         // TODO: Get subusers and blockheader
         let subusers = self.get_subusers(validator)?;
 
         // Subusers must be greater than 0
         if subusers > 0 {
-            // Lock mempool
-            let mut mempool = self.mempool();
+            // Get mempool
+            let mempool = &self.mempool;
 
             // Create new validated struct
             let validated = Validated::new(validator.clone(), subusers, auth.clone());
 
             // Add validated to mempool and update subusers
             mempool.add_validator(validated)?;
+
+            // If validator is complete, trigger future to check it.
 
             // If subusers count is more than threshold, vote on block
             // as validator
@@ -451,7 +448,7 @@ impl<T: Balances> Core<T> {
     /// 
     /// A `Block` can only be valid to send to the rest of the network
     /// if the current node is chosen as a block proposer
-    pub fn propose_block(&mut self) -> AgentResult<()> {
+    fn propose_block(&self) -> Option<Proposer> {
         let block = self.chain.new_block();
 
         // Attempt proposer to 
@@ -460,29 +457,19 @@ impl<T: Balances> Core<T> {
         
         // If subusers is greater than 0, node has been chosen to propose
         // block.
-        if self.get_subusers(&proposer)? > 0  {
-            // TODO: Send proposal to network
-            todo!()
-        };
-
-        Ok(())
+        if self.get_subusers(&proposer).ok()? > 0  {
+            // Return proposal
+            Some(proposer)
+        } else {
+            None
+        }
     }
 
     /// Attempt to vote an a `Block` that has been observed
     /// to be the highest new gdc addition to the chain
     /// by sending it's `BlockHeader` to the network as a finalized `Block`
-    fn finalize_block(&mut self) -> AgentResult<()> {
-        // Get proposer from mempool to finalize
-        let proposal_opt;
-        {
-            proposal_opt = self.mempool().get_proposal_to_finalize();
-        }
-
-        let Some(proposal) = proposal_opt else {
-            return Err(format!(
-                "Error: No proposal to finalize"
-            ))
-        };
+    fn finalize_block(&self, proposal_opt: Option<Proposal>) -> Option<Validator> {
+        let proposal = proposal_opt?;
 
         // Build validator using block id (header hash)
         let validator = Validator::new(
@@ -494,14 +481,12 @@ impl<T: Balances> Core<T> {
         // Get subusers using VRF output from validator
         // If subusers is greater than 0, node has been chosen to vote on
         // block being finalized.
-        let subusers = self.get_subusers(&validator)?;
-
-        if subusers > 0 {
-            // TODO: Send validator to network
-            todo!()
-        };
-
-        todo!()
+        if self.get_subusers(&validator).ok()? > 0 {
+            // Return validator to network
+            Some(validator)
+        } else {
+            None
+        }
     }
 
     /// Get subusers using VRF ouptput
@@ -533,7 +518,7 @@ impl<T: Balances> Core<T> {
     /// to be proposed.
     /// 
     /// This process happens every epoch in a constant loop
-    pub fn handle_epoch(&mut self) {
+    pub fn handle_epoch(&self) {
         // Add ctrs to cache
         self.chain.add_ctrs(
             self.jobs.get_pending_jobs()
@@ -541,17 +526,70 @@ impl<T: Balances> Core<T> {
     }
 
     /// Handle Synchronous finalization
-    pub fn handle_sync_final(&mut self) {
-        // Wait for epoch time
+    pub async fn handle_sync_final(&self) {
+        let mempool = &self.mempool;
 
-        // Handle epoch
+        loop {
+            // Wait for epoch time
+            time::sleep(Duration::from_secs(20u64)).await;
 
-        // Prepare a new block
+            // Handle epoch
+            self.handle_epoch();
 
-        // Wait time or check if proposal full
+            // Prepare a new block
+            if let Some(proposer) = self.propose_block() {
+                // TODO: Send proposer to network
+            }
 
-        // Validate proposal
+            // If mempool proposers is not full,
+            // Wait up to time limit for a full proposal, after grap whatever
+            // proposal is available
+            if !mempool.is_full_proposals() {
+                let _ = time::timeout(
+                    Duration::from_secs(20u64), 
+                    mempool.wait_for_full_proposal()
+                ).await;
+            }
 
-        // Wait until completion
+            // Always attempt validation until an agreement
+            // has been reached by the network on the block with
+            // the highest new gdc.
+            let validators = loop {
+                // Validate proposal and send to the network
+                if let Some(validator) = self.finalize_block(
+                    mempool.get_proposal_to_finalize()
+                ) {
+                    // TODO: Send validator to network
+                }
+
+                // If validators is not full, 
+                // then wait for validators up to
+                // time limit.
+                if !mempool.is_consensus_validators() {
+                    tokio::select! {
+                        // When validated list has reached consensus
+                        // break out of the loop and return validators
+                        validators = mempool.wait_for_consensus_validated() => {
+                            break validators;
+                        }
+  
+                        // If validated list cannot reach consensus
+                        // go back to beginning of loop given that the current
+                        // proposal should have the block with the highest 
+                        // observed new gdc
+                        _ = mempool.wait_for_failed_consensus_validated() => {}
+
+                        // If time duration reached, go back to beginning
+                        _ = time::sleep(Duration::from_secs(20u64)) => {}
+                    };
+
+                    // If validators have not been found, clear validators list
+                    // for next round of validator voting
+                    mempool.clear_validators()
+                }
+            };
+
+            // TODO: Create new block info to add to blockchain if validated exists
+        }
     }
 }

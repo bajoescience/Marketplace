@@ -1,6 +1,7 @@
 use std::cmp::Ordering;
 
 use marketplace_primitives::sync_final::{Proposal, Proposer};
+use marketplace_wallet::voting::EXPECTED_VOTERS;
 
 pub struct ProposedBlock {
     // Winning Proposed block
@@ -10,6 +11,24 @@ pub struct ProposedBlock {
     pub proposer_count: u64,
 }
 
+impl ProposedBlock {
+    pub fn new() -> Self {
+        Self { proposal: None, proposer_count: 0 }
+    }
+}
+
+// Getter methods
+impl ProposedBlock {
+    pub fn is_full(&self) -> bool {
+        if self.proposer_count >= EXPECTED_VOTERS as u64 {
+            true
+        } else {
+            false
+        }
+    }
+}
+
+// Setters methods
 impl ProposedBlock {
     pub fn add(&mut self, proposal: Proposal, subusers: u64) {
         self.proposal = Some(proposal);
@@ -121,7 +140,7 @@ mod tests {
     #[test]
     fn identical_candidate_compares_equal() {
         let proposal = proposal();
-        let mut proposed = ProposedBlock {
+        let proposed = ProposedBlock {
             proposal: Some(proposal.clone()),
             proposer_count: 1,
         };

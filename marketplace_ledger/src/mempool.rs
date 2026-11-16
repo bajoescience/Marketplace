@@ -2,10 +2,11 @@ mod proposed;
 
 pub use self::proposed::ProposedBlock;
 
-use std::{cmp::Ordering, todo};
+use std::{cmp::Ordering, sync::{Mutex, MutexGuard}};
+use tokio::sync::Notify;
 
 use marketplace_primitives::{
-    par_exec::Whiteroom, sync_final::{Proposal, Proposer, Validated, blockinfo::BlockInfo},
+    par_exec::Whiteroom, sync_final::{Proposal, Proposer, Validated},
 };
 
 use marketplace_helpers::{functions, objects::{AgentResult}};
@@ -14,7 +15,8 @@ use marketplace_wallet::voting::EXPECTED_VOTERS;
 // MAX whiteroom members for validators
 const WHITEROOM_MAX: usize = functions::max_wr_size_from_expected(EXPECTED_VOTERS);
 
-pub struct Mempool {
+/// Contains
+struct SyncLists {
     // Handle proposal
     proposed: ProposedBlock, 
 
@@ -22,51 +24,147 @@ pub struct Mempool {
     validators: Whiteroom<Validated, WHITEROOM_MAX>,
 }
 
-impl Mempool {
-    pub fn new() -> Self {
+impl SyncLists {
+    fn new() -> Self {
         Self {
-            proposed: ProposedBlock { proposal: None, proposer_count: 0 },
+            proposed: ProposedBlock::new(),
             validators: Whiteroom::new(),
         }
     }
 
+    fn clear(&mut self) {
+        self.proposed = ProposedBlock::new();
+        self.validators = Whiteroom::new();
+    }
+
+    pub fn clear_validators(&mut self) {
+        self.validators = Whiteroom::new();
+    }
+}
+
+pub struct Mempool {
+
+    // Notify object to notify when proposal is full
+    proposer_notify: Notify,
+
+    // Notify object to notify when validator has reach consensus
+    validator_notify: Notify,
+
+    // Notify when validator cannot reach consensus
+    validator_not_notify: Notify,
+
+    // Sync final lists
+    sync_lists: Mutex<SyncLists>,
+}
+
+impl Mempool {
+    pub fn new() -> Self {
+        Self {
+            proposer_notify: Notify::new(),
+            validator_notify: Notify::new(),
+            validator_not_notify: Notify::new(),
+            sync_lists: Mutex::new(SyncLists::new()),
+        }
+    }
+
+    /// Lock proposal and validators as sync lists to be able to access
+    /// method returns (proposed_lock, validators_lock)
+    fn sync_lists(&self) -> MutexGuard<'_, SyncLists> {
+        self.sync_lists.lock().unwrap()
+    }
+
+    /// Clear Mempool sync lists entries
+    pub fn clear(&self) {
+        self.sync_lists().clear()
+    }
+
+    /// Clear only validator sync list
+    pub fn clear_validators(&self) {
+        self.sync_lists().clear_validators();
+    }
+}
+
+// Future methods that check for full proposal or validator list
+impl Mempool {
+    /// If proposal list is full, get the proposal
+    /// to be validated
+    pub async fn wait_for_full_proposal(&self) {
+        self.proposer_notify.notified().await;
+    }
+
+    /// If validated list has reached consensus, get blockinfo
+    pub async fn wait_for_consensus_validated(&self) -> Whiteroom<Validated, WHITEROOM_MAX> {
+        self.validator_notify.notified().await;
+
+        self.get_validators()
+    }
+
+    /// If validated, do something real.
+    pub async fn wait_for_failed_consensus_validated(&self) {
+        self.validator_not_notify.notified().await;
+    }
+}
+
+// Setter methods
+impl Mempool {
+    /// Check if proposal is full
+    pub fn is_full_proposals(&self) -> bool {
+        self.sync_lists().proposed.is_full()
+    }
+
     /// Add a proposal to the MempoolState and update total subusers count
-    pub fn add_proposal(&mut self, proposal: Proposal, subusers: u64) {
-        self.proposed.add(proposal, subusers);
-        
+    pub fn add_proposal(&self, proposal: Proposal, subusers: u64) {
+        let proposed = &mut self.sync_lists().proposed;
+
+        proposed.add(proposal, subusers);
+
+        // Check if proposal is full
+        if proposed.is_full() {
+            self.proposer_notify.notify_one();
+        }
     }
 
     // Update proposal count
-    pub fn update_subusers(&mut self, subusers: u64) {
-        self.proposed.update_subusers(subusers);
+    pub fn update_subusers(&self, subusers: u64) {
+        self.sync_lists().proposed.update_subusers(subusers);
     }
 
     /// Get winning proposal to validate to network
-    pub fn get_proposal_to_finalize(&mut self) -> Option<Proposal> {
-        self.proposed.get_proposal()
+    pub fn get_proposal_to_finalize(&self) -> Option<Proposal> {
+        self.sync_lists().proposed.get_proposal()
     }
 
     /// Compare blocks to find which one is to be proposed
     pub fn cmp_proposers(&self, proposer: &Proposer) -> Ordering {
-        self.proposed.cmp_block_gdc(proposer)
+        self.sync_lists().proposed.cmp_block_gdc(proposer)
+    }
+
+    /// Check if validator whiteroom is full
+    pub fn is_consensus_validators(&self) -> bool {
+        self.sync_lists().validators.is_consensus()
     }
 
     /// Get block info to put in blockchain
-    pub fn get_block_info() -> AgentResult<BlockInfo> {
-        todo!()
+    pub fn get_validators(&self) -> Whiteroom<Validated, 33> {
+        self.sync_lists().validators.clone()
     }
 
     /// Add validator to mempool
-    pub fn add_validator(&mut self, validated: Validated) -> AgentResult<()> {
-        self.validators.add_member(validated)?;
-        Ok(())
-    }
+    pub fn add_validator(&self, validated: Validated) -> AgentResult<()> {
+        let validators = &mut self.sync_lists().validators;
 
-    /// Clear Mempool entries and input round number 
-    /// which is latest block index + 1
-    pub fn clear(&mut self) {
-        self.proposed = ProposedBlock { proposal: None, proposer_count: 0 };
-        self.validators = Whiteroom::new();
+        validators.add_member(validated)?;
+
+        // Check if validators has reached consensus
+        if validators.is_consensus() {
+            self.validator_notify.notify_one();
+        }
+
+        // Check if validators can reach consensus
+        if !validators.can_consensus() {
+            self.validator_not_notify.notify_one();
+        }
+        Ok(())
     }
 }
 
@@ -85,7 +183,7 @@ mod tests {
     // A new mempool should contain no proposal to finalize.
     #[test]
     fn new_mempool_has_no_proposal() {
-        let mut mempool = Mempool::new();
+        let mempool = Mempool::new();
 
         assert!(mempool.get_proposal_to_finalize().is_none());
     }
@@ -93,7 +191,7 @@ mod tests {
     // Adding a proposal should make it available for finalization.
     #[test]
     fn added_proposal_can_be_retrieved() {
-        let mut mempool = Mempool::new();
+        let mempool = Mempool::new();
 
         mempool.add_proposal(proposal(), 2);
 
@@ -103,7 +201,7 @@ mod tests {
     // Clearing the mempool should remove its current proposal and validator votes.
     #[test]
     fn clear_removes_the_current_proposal() {
-        let mut mempool = Mempool::new();
+        let mempool = Mempool::new();
         mempool.add_proposal(proposal(), 2);
 
         mempool.clear();

@@ -4,7 +4,7 @@ use marketplace_core::Core;
 use marketplace_helpers::{functions, objects::{AgentResult, IdHash, WU, WorkSize}};
 use marketplace_ledger::{Blockchain, DefaultBalances, State};
 use marketplace_p2p::Message;
-use marketplace_primitives::{par_exec::{ExecuteTime, Tx, TxOptRef, WorkPtr}, sync_final::BlockHeader};
+use marketplace_primitives::{par_exec::{ExecuteTime, TxOptRef, WorkPtr}, sync_final::BlockHeader};
 use marketplace_wallet::Owner;
 
 #[tokio::main]
