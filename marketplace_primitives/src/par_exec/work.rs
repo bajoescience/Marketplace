@@ -11,6 +11,7 @@ use marketplace_wallet::Lock;
 use crate::Verify;
 use crate::par_exec::TxOptRef;
 use crate::helpers::objects::{ID, WorkAddr};
+use crate::sync_final::BlockHeader;
 
 /// When to start executing work
 #[derive(BorshSerialize, BorshDeserialize, Debug, Clone)]
@@ -68,7 +69,7 @@ pub enum ExecuteTime {
 ///     WorkSize::build(work_size).unwrap(),
 ///     vec![TxOptRef::new([255u8; 32], 0)],
 ///     employer.as_wr_lock(),
-///     blk_hdr.id(),
+///     blk_hdr,
 ///     do_at
 /// );
 /// ```
@@ -92,7 +93,7 @@ pub struct WorkPtr {
 
     // ID of Latest Block Header at time of publishing
     // If block header is not latest ID, the job has expired.
-    blk_hdr: ID,
+    blk_hdr: BlockHeader,
 }
 
 impl WorkPtr {
@@ -135,7 +136,7 @@ impl WorkPtr {
     ///     WorkSize::build(work_size).unwrap(),
     ///     ipts,
     ///     employer.as_wr_lock(),
-    ///     blk_hdr.id(),
+    ///     blk_hdr,
     ///     do_at
     /// );
     /// ```
@@ -144,7 +145,7 @@ impl WorkPtr {
         size: WorkSize, 
         ipts: Vec<TxOptRef>,
         remainder: Lock,
-        blk_hdr: ID,
+        blk_hdr: BlockHeader,
         do_at: ExecuteTime
     ) -> Self {
 
@@ -180,7 +181,7 @@ impl WorkPtr {
     }
 
     // Get Block header ID
-    pub fn blk_hdr(&self) -> &ID {
+    pub fn blk_hdr(&self) -> &BlockHeader {
         &self.blk_hdr
     }
 
@@ -218,7 +219,7 @@ use super::*;
         let owner = Owner::new_sig();
 
         let work_addr = [1u8; 32];
-        let blk_hdr = [2u8; 32];
+        let blk_hdr = BlockHeader::genesis();
         let size = WorkSize::build(WU::try_from(20000).unwrap()).unwrap();
         let work_ptr = WorkPtr::new(
             work_addr,
@@ -239,7 +240,7 @@ use super::*;
                 TxOptRef::new([255; 32], 0)
             ]
         );
-        assert_eq!(work_ptr.blk_hdr(), &blk_hdr);
+        assert_eq!(work_ptr.blk_hdr(), &BlockHeader::genesis());
         assert!(matches!(work_ptr.do_at(), ExecuteTime::AFTER(10)));
     }
 

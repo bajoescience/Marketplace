@@ -28,6 +28,13 @@ impl ProposedBlock {
     }
 }
 
+// Getter methods
+impl ProposedBlock {
+    pub fn proposal(&self) -> &Option<Proposal> {
+        &self.proposal
+    }
+}
+
 // Setters methods
 impl ProposedBlock {
     pub fn add(&mut self, proposal: Proposal, subusers: u64) {
@@ -74,9 +81,9 @@ impl ProposedBlock {
         }
     }
 
-    // Clear the struct and return a proposal
-    pub fn get_proposal(&mut self) -> Option<Proposal> {
-        self.proposal.clone()
+    // Return a proposal
+    pub fn get_proposal(&self) -> Option<&Proposal> {
+        self.proposal.as_ref()
     }
 }
 

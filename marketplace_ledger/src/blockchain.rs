@@ -1,40 +1,32 @@
 use marketplace_helpers::{functions, objects::{AgentResult, Epoch, ID, IdHash, StdResult, WU}};
 
 use marketplace_primitives::{
-    par_exec::{Bill, Contract, TxOpt, TxOptRef, Whiteroom, WorkPtr}, sync_final::{Block, BlockBody, Validated, blockinfo::BlockInfo},
+    par_exec::{Bill, Contract, TxOpt, TxOptRef, WorkPtr}, sync_final::{Block, BlockBody, BlockHeader, blockinfo::BlockInfo},
 };
 
 use std::{collections::HashMap, panic, path::Path, sync::{Mutex, MutexGuard, RwLock, RwLockReadGuard, RwLockWriteGuard}};
 
-use redb::{Database, Error, ReadableDatabase, ReadableTable, ReadableTableMetadata, TableDefinition};
+use redb::{Database, Error, ReadableDatabase, ReadableTableMetadata, TableDefinition};
 
-/// Store all `BlockInfo` directly and address them by their id
+/// Store all `BlockInfo` directly and address them by their epoch
 /// 
 /// 
-/// block_id -> Block
-const BLOCKS: TableDefinition<&[u8], &[u8]> = TableDefinition::new("blocks");
+/// index -> BlockInfo
+const BLOCKS: TableDefinition<Epoch, &[u8]> = TableDefinition::new("blocks");
 
 /// Store each block index so as to get block id of corresponding epoch
 /// 
 /// index -> block_id
 const INDEXES: TableDefinition<Epoch, &[u8]> = TableDefinition::new("indexes");
 
-/// Store list of validators that authenticate block
-/// 
-/// index -> Validators
-const AUTHS: TableDefinition<Epoch, &[u8]> = TableDefinition::new("auths");
-
 /// Store metadata for the blockcjain for example:
 /// genesis block ("genesis" -> [u8; 32])
 /// total goldcoin in chain ("gdc": [u8; 16])
 const METADATA: TableDefinition<&str, &[u8]> = TableDefinition::new("metadata");
 
-use marketplace_wallet::{Key, Lock, voting::EXPECTED_VOTERS};
+use marketplace_wallet::{Key, Lock};
 
 use crate::{Balances, State, state};
-
-// MAX whiteroom members for validators
-const WHITEROOM_MAX: usize = functions::max_wr_size_from_expected(EXPECTED_VOTERS);
 
 // # Blockchain
 // Store list of `Blocks`
@@ -52,55 +44,6 @@ pub struct Blockchain<B: Balances> {
 }
 
 impl<B: Balances> Blockchain<B> {
-    // Initialize blockchain database tables
-    pub fn init_tables(db: &Database) -> Result<(), Error> {
-        // Genesis block
-        let genesis = Block::genesis();
-        let genesis_id = genesis.id();
-
-        let write_txn = db.begin_write()?;
-
-        // Open tables, and create them if they do not exist
-        {
-            // Open Blocks table
-            // Store block_id -> Block
-            let mut blocks = write_txn.open_table(BLOCKS)?;
-
-            // Open Index table
-            //  Store index -> Block id
-            let mut indexes = write_txn.open_table(INDEXES)?;
-
-            // Open metadata table
-            let mut metadata = write_txn.open_table(METADATA)?;
-
-            // Create auths table
-            write_txn.open_table(AUTHS)?;
-
-            // If block table is empty,
-            // clear other tables and initialize them
-            // with genesis block.
-            if blocks.is_empty()? {
-                // Add genesis metadata and remove
-                // any previous data
-                metadata.insert("genesis", genesis_id.as_slice())?;
-                metadata.insert("gdc", genesis.total_gdc().as_slice())?;
-
-                // Clear all previous indexes if they exist
-                while let Some(_) = indexes.pop_first()? {};
-
-                // Add genesis data to index
-                indexes.insert(0, genesis_id.as_slice())?;
-
-                // Insert genesis block
-                blocks.insert(genesis_id.as_slice(), genesis.serialize().as_slice())?;
-            }
-        }
-
-        write_txn.commit()?;
-
-        Ok(())
-    }
-
     /// Initialize a `Blockchain`
     /// 
     /// using the path of the blockchain database file
@@ -173,10 +116,10 @@ impl<B: Balances> Blockchain<B> {
         let blockbody = self.get_block_body();
 
         // Get latest block in chain which acts as new block's prev block
-        let prev_block = self.latest_block().expect("Unable to get latest block");
+        let prev_hdr = self.latest_header().expect("Unable to get latest header");
         
         // Return new block
-        Block::new(prev_block.header(), blockbody)
+        Block::new(&prev_hdr, blockbody)
     }
 
     /// Remove contract from cache if it exists
@@ -219,10 +162,10 @@ impl<B: Balances> Blockchain<B> {
         }
 
         // Validate block header using previous block header
-        let prev_block = self.latest_block()
-            .expect("Latest block could not be fetched");
+        let prev_hdr = self.latest_header()
+            .expect("Latest block Header could not be fetched");
 
-        block.validate(prev_block.header())
+        block.validate(&prev_hdr)
     }
 
     // Try to take input UTXO's for jobcontracts
@@ -315,8 +258,52 @@ impl<B: Balances> Blockchain<B> {
 
 // Getter methods for database
 impl<B: Balances> Blockchain<B> {
+    // Initialize blockchain database tables
+    pub fn init_tables(db: &Database) -> Result<(), Error> {
+        // Genesis block
+        let genesis = Block::genesis();
+
+        let write_txn = db.begin_write()?;
+
+        // Open tables, and create them if they do not exist
+        {
+            // Open Blocks table
+            // Store block_id -> Block
+            let blocks = write_txn.open_table(BLOCKS)?;
+
+            // Open Index table
+            //  Store index -> Block id
+            let mut indexes = write_txn.open_table(INDEXES)?;
+
+            // Open metadata table
+            let mut metadata = write_txn.open_table(METADATA)?;
+
+            // If block table is empty,
+            // clear other tables and initialize them
+            // with genesis block.
+            if blocks.is_empty()? {
+                // Add genesis block as metadata and remove
+                // any previous data
+                metadata.insert("genesis", genesis.serialize().as_slice())?;
+
+                // Store latest block header
+                metadata.insert("latest", genesis.header().serialize().as_slice())?;
+
+                // Clear all previous indexes if they exist
+                while let Some(_) = indexes.pop_first()? {};
+
+                // Add genesis data to index
+                indexes.insert(0, genesis.id().as_slice())?;
+            }
+        }
+
+        write_txn.commit()?;
+
+        Ok(())
+    }
+
     /// Get block from index
-    pub fn get_block_by_id(&self, id: &[u8]) -> StdResult<Option<Block>> {
+    pub fn get_blockinfo_by_index(&self, index: Epoch) -> StdResult<Option<BlockInfo>> {
         let read_txn;
         {
             read_txn = self.db_read().begin_read()?;
@@ -324,152 +311,39 @@ impl<B: Balances> Blockchain<B> {
 
         // Get Block option indicating absence or presence of the block.
         let block_option = read_txn.open_table(BLOCKS)?
-            .get(id)?;
+            .get(index)?;
 
         
         Ok(
             block_option.map(
-                |blk_bytes| 
-                Block::from(blk_bytes.value())
+                |blkinfo_bytes| 
+                BlockInfo::from_bytes(blkinfo_bytes.value())
                     .expect("Error: Block bytes are invalid")
-            )
-        )
-    }
-
-    /// Get auth by index
-    pub fn get_auth_by_index(&self, index: Epoch) -> StdResult<Option<Whiteroom<Validated, WHITEROOM_MAX>>> {
-        let read_txn;
-        {
-            read_txn = self.db_read().begin_read()?;
-        }
-
-        let auth_option = read_txn.open_table(AUTHS)?
-            .get(index)?;
-
-        Ok(
-            auth_option.map(
-                |auth_bytes|
-                Whiteroom::from(auth_bytes.value())
-                    .expect("Error: Auth bytes are invalid")
             )
         )
     }
 
     /// Get blockchain genesis block
     pub fn genesis_block(&self) -> StdResult<Block> {
-        let read_txn; 
+        let metadata; 
         {
-            read_txn = self.db_read().begin_read()?;
+            metadata = self.db_read()
+                .begin_read()?
+                .open_table(METADATA)?;
         }
 
         // Get genesis header, which should exist
         // or panic
-        let Some(genesis) = read_txn
-            .open_table(METADATA)?
-            .get("genesis")?
+        let Some(genesis) = metadata.get("genesis")?
         else {
             panic!("Illegal: Blockchain has no genesis block")
         };
 
-        // If genesis block does not exist, panic
-        let Some(block_bytes) = read_txn
-            .open_table(BLOCKS)?
-            .get(genesis.value())?
-        else {
-            panic!("Illegal: Genesis block not found");
-        };
-
-        Ok(Block::from(block_bytes.value())?)
+        Ok(Block::from_bytes(genesis.value())?)
     }
 
-    /// Get blockinfo by index
-    /// 
-    /// Note that this method returns None for the genesis index of 0
-    /// 
-    /// It also returns None for indexes not found in the blockchain DB
-    pub fn get_blockinfo_by_index(&self, index: Epoch) -> StdResult<Option<BlockInfo>> {
-        let read_txn;
-        {
-            read_txn = self.db_read().begin_read()?;
-        }
-
-        // Genesis block info does not exist
-        if index == 0 {
-            return Ok(None)
-        }
-
-        let auth_option = self.get_auth_by_index(index)?;
-
-        // Get block id from epoch table if it exists
-        let Some(block_id) = read_txn.open_table(INDEXES)?
-            .get(index)?
-        else {
-            return Ok(None)
-        };
-
-        // Get block
-        let block_option = self.get_block_by_id(block_id.value())?;
-
-        let (Some(block), Some(auth)) = (block_option, auth_option) else {
-            return Ok(None)
-        };
-
-        Ok(Some(BlockInfo::new(block, auth)))
-    
-    }
-
-    // Latest blockinfo entry in the blockchain
-    fn latest_epoch_entry(&self) -> StdResult<(Epoch, ID)>  {
-        let indexes;
-        {
-            indexes = self.db_read()
-                .begin_read()?
-                .open_table(INDEXES)?;
-        }
-
-        // Epoch table must at least contain genesis block id for epoch 0.
-        let (index, block_id_bytes) = indexes.last()?
-            .expect("Illegal: Blocks table should not be empty and must contain a genesis block");
-
-        Ok((
-            index.value(),
-            block_id_bytes.value().try_into()?
-        ))
-    }
-
-    /// Returns the length of the chain which is the latest epoch + 1
-    /// because epoch starts at 0.
-    pub fn len(&self) -> StdResult<u64> {
-        let (len, _) = self.latest_epoch_entry()?;
-
-        Ok(len + 1)
-    }
-
-    /// Returns the latest block
-    /// 
-    /// Also: the prev block id can be gotten from the latest
-    /// block header
-    pub fn latest_block(&self) -> StdResult<Block> {
-        // Block id
-        let (epoch, blk_id) = self.latest_epoch_entry()?;
-
-        if epoch == 0 {
-            return Ok(self.genesis_block()?)
-        }
-
-        let block = self.get_block_by_id(blk_id.as_slice())?
-            .expect("Error: Blockchain should have at least genesis block");
-
-        Ok(block)
-    }
-
-    /// Get seed for syncchronous finalization rounds 
-    pub fn seed(&self) -> ID {
-        self.latest_block().unwrap().header().id()
-    }
-
-    /// Total goldcoin in chain
-    pub fn total_gdc(&self) -> StdResult<WU> {
+    // Get latetst block header
+    fn latest_header(&self) -> StdResult<BlockHeader> {
         let metadata;
         {
             metadata = self.db_read()
@@ -477,27 +351,79 @@ impl<B: Balances> Blockchain<B> {
                 .open_table(METADATA)?;
         }
 
-        // "gdc" should be defined in the db
-        // as part of initialization
-        let bytes = metadata.get("gdc")?
-            .expect("Illegal: gdc entry should exist");
+        let Some(header) = metadata.get("latest")? else {
+            panic!("Illegal: Blockchain has no block header")
+        };
 
-        let int = u128::from_be_bytes(bytes.value().try_into()?);
+        Ok(BlockHeader::from_bytes(header.value())?)
+    }
 
-        Ok(WU::try_from(int).unwrap())
+    // Latest blockinfo entry in the blockchain
+    pub fn latest_blockinfo(&self) -> StdResult<BlockInfo>  {
+        // Latest block header index
+        let index = self.latest_header()?.index();
+
+        // Get latest block which must exist
+        // which is why there is an unwrap
+        Ok(
+            self.get_blockinfo_by_index(index)?.unwrap()
+        )
+    }
+
+    /// Returns the length of the chain which is the latest index + 1
+    /// because epoch starts at 0.
+    pub fn len(&self) -> StdResult<u64> {
+        let len = self.latest_header()?.index();
+
+        Ok(len + 1)
+    }
+
+    /// Confirm block exists in database
+    pub fn is_block(&self, header: &BlockHeader) -> StdResult<bool> {
+        let indexes; 
+
+        {
+            indexes = self.db_read()
+                .begin_read()?
+                .open_table(INDEXES)?;
+        }
+
+        // If header id could not be found or the id in the indexes table does not match
+        // the header id, then false is returned
+        if let Some(id) = indexes.get(header.index())? {
+            let id: ID = id.value().try_into()?;
+
+            if header.id() == id {
+                return Ok(true)
+            }
+        }
+
+        Ok(false)
+    }
+
+    /// Get seed for syncchronous finalization rounds 
+    pub fn seed(&self) -> ID {
+        self.latest_header().unwrap().id()
+    }
+
+    /// Total goldcoin in chain
+    pub fn total_gdc(&self) -> StdResult<WU> {
+        let latest_header = self.latest_header().unwrap();
+
+        Ok(latest_header.total_gdc())
     }
 
     /// Check if a block id belongs to a recent block
     /// 
     /// A recent block is either the latest block or the block before it.
-    pub fn is_recent(&self, id: ID) -> StdResult<bool> {
-        let latest = self.latest_block()?;
+    pub fn is_recent(&self, id: ID) -> bool {
+        let latest = self.latest_header().unwrap();
 
-        if latest.id() == id || latest.header().prev() == id {
-            return Ok(true)
+        if latest.id() == id || latest.prev() == id {
+            return true
         }
 
-        Ok(false)
+        false
     }
 
     /// # Blockchain Iterator
@@ -517,8 +443,7 @@ impl<B: Balances> Blockchain<B> {
 impl<B: Balances> Blockchain<B> {
     // Add to file
     fn add_to_db(&self, blockinfo: BlockInfo) -> StdResult<()> {
-        // Sepearte blockinfo into block and auth
-        let (block, auth) = blockinfo.destroy();
+        let block = blockinfo.block();
         let index = block.header().index();
 
         let write_txn = self.db_write().begin_write()?;
@@ -526,9 +451,8 @@ impl<B: Balances> Blockchain<B> {
         {
             // Update total gdc in metadata
             let mut metadata = write_txn.open_table(METADATA)?;
-            let gdc = block.header().total_gdc();
 
-            metadata.insert("gdc", gdc.inner().to_be_bytes().as_slice())?;
+            metadata.insert("latest", block.header().serialize().as_slice())?;
 
 
             // Chain must have checked if block index immediately follows the
@@ -538,12 +462,9 @@ impl<B: Balances> Blockchain<B> {
             indexes.insert(index, block.id().as_slice())?;
 
 
-            // Update blocks and auths tables with block info data
+            // Update blocks with block info data
             let mut blocks = write_txn.open_table(BLOCKS)?;
-            blocks.insert(block.id().as_slice(), block.serialize().as_slice())?;
-
-            let mut auths = write_txn.open_table(AUTHS)?;
-            auths.insert(index, auth.serialize().as_slice())?;
+            blocks.insert(index, blockinfo.serialize().as_slice())?;
         }
 
         write_txn.commit()?;
@@ -557,8 +478,7 @@ impl<B: Balances> Blockchain<B> {
     /// 
     /// This method takes a Block from the mempool and
     /// adds it to the chain
-    pub fn publish_blockinfo(&mut self, blockinfo: BlockInfo) -> AgentResult<()> {
-
+    pub fn publish_blockinfo(&self, blockinfo: BlockInfo) -> AgentResult<()> {
         // Confirm and validate block
         self.update_state_with_block(blockinfo.block())?;
 
@@ -670,7 +590,7 @@ use marketplace_wallet::Owner;
         // Single block is genesis
         let genesis = Block::genesis();
         assert_eq!(chain.total_gdc()?, WU::GDC());
-        assert_eq!(chain.latest_block()?.id(), genesis.id());
+        assert_eq!(chain.latest_header()?.id(), genesis.id());
 
         fs::remove_file(path)?;
         Ok(())
@@ -690,19 +610,6 @@ use marketplace_wallet::Owner;
         Ok(())
     }
 
-    // Return no block when a requested block ID is absent from the database.
-    #[test]
-    fn returns_none_for_unknown_block_id() -> StdResult<()> {
-        let path = test_db("unknown_block_id");
-        let state: State<state::DefaultBalances> = State::new();
-        let chain = Blockchain::init(&path, state)?;
-
-        assert!(chain.get_block_by_id(&[42u8; 32])?.is_none());
-
-        fs::remove_file(path)?;
-        Ok(())
-    }
-
     // The genesis block should be retrievable and recognized as the latest recent block.
     #[test]
     fn genesis_block_is_recent_and_retrievable() -> StdResult<()> {
@@ -712,8 +619,8 @@ use marketplace_wallet::Owner;
         let genesis = chain.genesis_block()?;
 
         assert_eq!(genesis.id(), Block::genesis().id());
-        assert!(chain.is_recent(genesis.id())?);
-        assert!(!chain.is_recent([42; 32])?);
+        assert!(chain.is_recent(genesis.id()));
+        assert!(!chain.is_recent([42; 32]));
 
         fs::remove_file(path)?;
         Ok(())

@@ -188,13 +188,17 @@ pub trait Member {
 }
 
 // Hash trait
-pub trait IdHash {
+pub trait IdHash: Sized {
     fn id(&self) -> ID;
+
+    fn serialize(&self) -> Vec<u8>;
+
+    fn from_bytes(bytes: &[u8]) -> Result<Self, std::io::Error>;
 }
 
 impl<T> IdHash for T
 where 
-    T: BorshSerialize,
+    T: BorshSerialize + BorshDeserialize,
 {
     fn id(&self) -> ID {
         // Serialize message into bytes
@@ -202,6 +206,17 @@ where
 
         // Hash serialized bytes and return
         functions::hash(&bytes)
+    }
+
+    /// Create block from block bytes
+    fn from_bytes(bytes: &[u8]) -> Result<Self, std::io::Error> {
+        borsh::from_slice(bytes)
+    }
+
+    // Serialize
+    fn serialize(&self) -> Vec<u8> {
+        borsh::to_vec(&self)
+            .expect("Illegal: Error Serializing Object")
     }
 }
 

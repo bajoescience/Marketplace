@@ -43,17 +43,6 @@ impl Block {
             body: BlockBody::genesis(),
         }
     }
-
-    /// Create block from block bytes
-    pub fn from(bytes: &[u8]) -> Result<Self, std::io::Error> {
-        borsh::from_slice(bytes)
-    }
-
-    // Serialize
-    pub fn serialize(&self) -> Vec<u8> {
-        borsh::to_vec(&self)
-            .expect("Illegal: Error Serializing Block")
-    }
 }
 
 // Getter functions
@@ -131,7 +120,7 @@ impl Block {
 mod tests {
     use std::assert_eq;
 
-use marketplace_helpers::objects::WU;
+use marketplace_helpers::objects::{WU, IdHash};
 
 use super::*;
 
@@ -160,7 +149,8 @@ use super::*;
     #[test]
     fn block_serialization_round_trip() -> Result<(), std::io::Error> {
         let block = Block::genesis();
-        let restored = Block::from(&block.serialize())?;
+
+        let restored = Block::from_bytes(&IdHash::serialize(&block))?;
 
         assert_eq!(restored.id(), block.id());
         assert_eq!(restored.body().len(), block.body().len());

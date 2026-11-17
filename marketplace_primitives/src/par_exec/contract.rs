@@ -110,9 +110,9 @@ use crate::{
         let blk_hdr = BlockHeader::genesis();
 
         // Input
-        let workptr = workptr(&ipt_owner, blk_hdr.id());
+        let workptr = workptr(&ipt_owner, blk_hdr);
         let vdf_diff = functions::vdf_difficulty(workptr.work_size().into(), blk_hdr.vrf_t());
-        let mut jobctr = JobContract::new(workptr, blk_hdr.clone());
+        let mut jobctr = JobContract::new(workptr);
         
         // ResultPtr Initializers
         let work_id = jobctr.input().id();

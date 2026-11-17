@@ -203,7 +203,7 @@ impl<B: Balances> Core<B> {
         let blk_hdr = workptr.blk_hdr();
 
         // referenced by workptr
-        let Some(block) = self.chain.get_block_by_id(blk_hdr).unwrap() else {
+        if !self.chain.is_block(blk_hdr).unwrap() {
             return Err(format!(
                 "Error: Block header does not exist"
             ))
@@ -215,7 +215,6 @@ impl<B: Balances> Core<B> {
 
         let jobctr = JobContract::new_with_auth(
             workptr.clone(),
-            block.header().clone(),
             auth.clone()
         );
 
@@ -223,7 +222,7 @@ impl<B: Balances> Core<B> {
         self.jobs.add_contract(jobctr, utxos);
 
         // If workptr is recent, execute it with worker
-        if self.chain.is_recent(*blk_hdr).unwrap() {
+        if self.chain.is_recent(blk_hdr.id()) {
             // TODO: Execute work
         }
 
@@ -359,11 +358,7 @@ impl<B: Balances> Core<B> {
             // Add validated to mempool and update subusers
             mempool.add_validator(validated)?;
 
-            // If validator is complete, trigger future to check it.
-
-            // If subusers count is more than threshold, vote on block
-            // as validator
-            todo!()
+            Ok(())
         } else {
             return Err(format!(
                 "Err: Block is not a valid proposed block"
@@ -410,15 +405,12 @@ impl<T: Balances> Core<T> {
             match ctr {
                 Contract::JOB(jobctr) => {
                     // block referenced by workptr should exist
-                    let Some(_) = self.chain
-                        .get_block_by_id(&jobctr.get_blk_hdr().id())
-                        .expect("Error encountered finding block referenced by contract from blockchain DB") 
-                    else {
+                    if !self.chain.is_block(&jobctr.blk_hdr()).unwrap() 
+                    {
                         return Err(format!(
                             "Error: Block {} does not exist in Blockchain",
-                            functions::from_bytes(&jobctr.get_blk_hdr().id()) 
+                            functions::from_bytes(&jobctr.blk_hdr().id()) 
                         ))
-              
                     };
 
                     // If error removing spent utxos, return Err
@@ -544,52 +536,42 @@ impl<T: Balances> Core<T> {
             // If mempool proposers is not full,
             // Wait up to time limit for a full proposal, after grap whatever
             // proposal is available
-            if !mempool.is_full_proposals() {
-                let _ = time::timeout(
-                    Duration::from_secs(20u64), 
-                    mempool.wait_for_full_proposal()
-                ).await;
-            }
+            let _ = time::timeout(
+                Duration::from_secs(20u64), 
+                mempool.wait_for_full_proposal()
+            ).await;
 
             // Always attempt validation until an agreement
             // has been reached by the network on the block with
             // the highest new gdc.
-            let validators = loop {
-                // Validate proposal and send to the network
+            let blockinfo = loop {
                 if let Some(validator) = self.finalize_block(
-                    mempool.get_proposal_to_finalize()
+                    mempool.get_proposal()
                 ) {
                     // TODO: Send validator to network
                 }
 
-                // If validators is not full, 
-                // then wait for validators up to
-                // time limit.
-                if !mempool.is_consensus_validators() {
-                    tokio::select! {
-                        // When validated list has reached consensus
-                        // break out of the loop and return validators
-                        validators = mempool.wait_for_consensus_validated() => {
-                            break validators;
+                // Race consensus success against consensus failure, bounded by a timeout limit
+                let outcome = time::timeout(
+                    Duration::from_secs(20), 
+                    async {
+                        tokio::select! {
+                            blockinfo = mempool.wait_for_consensus_validated() => Some(blockinfo),
+                            _ = mempool.wait_for_failed_consensus_validated() => None,
                         }
-  
-                        // If validated list cannot reach consensus
-                        // go back to beginning of loop given that the current
-                        // proposal should have the block with the highest 
-                        // observed new gdc
-                        _ = mempool.wait_for_failed_consensus_validated() => {}
+                }).await;
 
-                        // If time duration reached, go back to beginning
-                        _ = time::sleep(Duration::from_secs(20u64)) => {}
-                    };
-
-                    // If validators have not been found, clear validators list
-                    // for next round of validator voting
-                    mempool.clear_validators()
+                // Only break if we didn't time out (Ok) AND consensus succeeded (Some)
+                if let Ok(Some(blockinfo)) = outcome {
+                    break blockinfo;
                 }
+
+                mempool.clear_validators();
             };
 
-            // TODO: Create new block info to add to blockchain if validated exists
+            // Add blockinfo to blockchain
+            self.chain.publish_blockinfo(blockinfo).unwrap()
+
         }
     }
 }

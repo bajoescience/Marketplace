@@ -31,7 +31,7 @@ fn new_job(owner: &Owner) -> Message<WorkPtr> {
     let work_size = WorkSize::build(WU::GDC()).unwrap();
     let ipts = vec![TxOptRef::new([255u8; 32], 0)];
     let remainder = Owner::new_sig().as_lock();
-    let blk_hdr = BlockHeader::genesis().id();
+    let blk_hdr = BlockHeader::genesis();
 
     let workptr = WorkPtr::new(
         work_addr, 

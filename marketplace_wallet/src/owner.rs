@@ -57,6 +57,13 @@ pub enum Owner {
 }
 
 impl Owner {
+    // Owner id
+    // We change the owner to it's lock form
+    // before getting it's ID
+    fn id(&self) -> ID {
+        self.as_lock().id()
+    }
+
     /// Create a new `Owner` with a single keypair
     pub fn new_sig() -> Self {
         let wallet = Wallet::new();
@@ -140,14 +147,6 @@ impl PartialEq<Lock> for Owner {
             },
             _ => false
         }
-    }
-}
-
-// We change the owner to it's lock form
-// before getting it's ID
-impl IdHash for Owner {
-    fn id(&self) -> ID {
-        self.as_lock().id()
     }
 }
 

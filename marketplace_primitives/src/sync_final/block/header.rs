@@ -3,7 +3,7 @@ use marketplace_helpers::{functions, objects::{ID, IdHash, VRF_T, WU}};
 
 use crate::{sync_final::block::BlockBody};
 
-#[derive(BorshSerialize, BorshDeserialize, Debug, Clone)]
+#[derive(BorshSerialize, BorshDeserialize, Debug, Clone, Copy)]
 pub struct BlockHeader {
     // Block number starting from 0 (genesis block)
     index: u64,

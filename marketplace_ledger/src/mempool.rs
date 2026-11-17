@@ -2,11 +2,11 @@ mod proposed;
 
 pub use self::proposed::ProposedBlock;
 
-use std::{cmp::Ordering, sync::{Mutex, MutexGuard}};
+use std::{cmp::Ordering, sync::{Mutex, MutexGuard}, todo};
 use tokio::sync::Notify;
 
 use marketplace_primitives::{
-    par_exec::Whiteroom, sync_final::{Proposal, Proposer, Validated},
+    par_exec::Whiteroom, sync_final::{Proposal, Proposer, Validated, blockinfo::BlockInfo},
 };
 
 use marketplace_helpers::{functions, objects::{AgentResult}};
@@ -84,7 +84,8 @@ impl Mempool {
     }
 }
 
-// Future methods that check for full proposal or validator list
+// Async methods 
+// some check for full proposal or validator list
 impl Mempool {
     /// If proposal list is full, get the proposal
     /// to be validated
@@ -93,15 +94,44 @@ impl Mempool {
     }
 
     /// If validated list has reached consensus, get blockinfo
-    pub async fn wait_for_consensus_validated(&self) -> Whiteroom<Validated, WHITEROOM_MAX> {
+    pub async fn wait_for_consensus_validated(&self) -> BlockInfo {
         self.validator_notify.notified().await;
 
-        self.get_validators()
+        self.get_blockinfo().await
     }
 
     /// If validated, do something real.
     pub async fn wait_for_failed_consensus_validated(&self) {
         self.validator_not_notify.notified().await;
+    }
+
+    /// Get block info from a list of validators.
+    /// If the mempool does not contain the chosen block
+    /// fetch it from the network by request.
+    pub async fn get_blockinfo(
+        &self,
+    ) -> BlockInfo {
+        // Validators
+        let validators = self.get_validators();
+
+        // Get winning block id
+        // Validators must be in consensus
+        let block_id = *validators.winning_vote().unwrap().0;
+
+        let sync_lists = self.sync_lists();
+        let proposal = sync_lists.proposed.get_proposal().unwrap();
+
+        // If self does not hold the proposal with a similar block
+        // try to receive block
+        if proposal.block().id() != block_id {
+            // Request proposal
+            todo!()
+        }
+
+        BlockInfo::new(
+            proposal.clone(), 
+            validators
+        )
     }
 }
 
@@ -130,8 +160,8 @@ impl Mempool {
     }
 
     /// Get winning proposal to validate to network
-    pub fn get_proposal_to_finalize(&self) -> Option<Proposal> {
-        self.sync_lists().proposed.get_proposal()
+    pub fn get_proposal(&self) -> Option<Proposal> {
+        self.sync_lists().proposed.get_proposal().cloned()
     }
 
     /// Compare blocks to find which one is to be proposed
@@ -185,7 +215,7 @@ mod tests {
     fn new_mempool_has_no_proposal() {
         let mempool = Mempool::new();
 
-        assert!(mempool.get_proposal_to_finalize().is_none());
+        assert!(mempool.get_proposal().is_none());
     }
 
     // Adding a proposal should make it available for finalization.
@@ -195,7 +225,7 @@ mod tests {
 
         mempool.add_proposal(proposal(), 2);
 
-        assert!(mempool.get_proposal_to_finalize().is_some());
+        assert!(mempool.get_proposal().is_some());
     }
 
     // Clearing the mempool should remove its current proposal and validator votes.
@@ -206,6 +236,6 @@ mod tests {
 
         mempool.clear();
 
-        assert!(mempool.get_proposal_to_finalize().is_none());
+        assert!(mempool.get_proposal().is_none());
     }
 }

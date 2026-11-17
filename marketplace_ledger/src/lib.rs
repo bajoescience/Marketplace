@@ -19,14 +19,14 @@ mod tests {
     fn public_ledger_types_can_be_constructed() {
         let state = State::<DefaultBalances>::new();
         let jobs = Jobs::new();
-        let mut mempool = Mempool::new();
+        let mempool = Mempool::new();
         let owner = Owner::new_sig();
 
         assert_eq!(
             state.get_gdc_balance(owner.as_lock()),
             marketplace_helpers::objects::WU::default()
         );
-        assert!(mempool.get_proposal_to_finalize().is_none());
+        assert!(mempool.get_proposal().is_none());
         drop(jobs);
     }
 }

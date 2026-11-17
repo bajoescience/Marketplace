@@ -132,9 +132,9 @@ use crate::{
         let blk_hdr = BlockHeader::genesis();
 
         // Initialize valid Work Ptr
-        let workptr = workptr(&owner, blk_hdr.id());
+        let workptr = workptr(&owner, blk_hdr);
         let vdf_diff = functions::vdf_difficulty(workptr.work_size().into(), blk_hdr.vrf_t());
-        let mut jobctr = JobContract::new(workptr, blk_hdr.clone());
+        let mut jobctr = JobContract::new(workptr);
 
         // Initialize size result pointers
         // ResultPtr Initializers

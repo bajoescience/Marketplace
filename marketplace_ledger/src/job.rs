@@ -127,11 +127,11 @@ mod tests {
             WorkSize::build(WU::try_from(10_000).unwrap()).unwrap(),
             vec![TxOptRef::new([255; 32], 0)],
             owner.as_wr_lock(),
-            header.id(),
+            header,
             ExecuteTime::NOW,
         );
 
-        JobContract::new(work, header)
+        JobContract::new(work)
     }
 
     // Jobs should return an error when the requested work pointer is absent.
