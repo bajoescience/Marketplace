@@ -79,6 +79,13 @@ where
         self.list.iter()
     }
 
+    // Owned whiteroom members
+    pub fn owned_members(&mut self) -> impl Iterator<Item = T> {
+        self
+        .list
+        .drain(..)
+    }
+
     // Gwt winning members
     pub fn winners(&self) -> impl Iterator<Item = &T> {
         self.members()

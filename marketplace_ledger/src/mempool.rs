@@ -12,7 +12,7 @@ use marketplace_primitives::{
     par_exec::Whiteroom, sync_final::{Proposal, Proposer, Validated, blockinfo::BlockInfo},
 };
 
-use marketplace_helpers::{functions, objects::{AgentResult}};
+use marketplace_helpers::{functions, objects::{AgentResult, IdHash}};
 use marketplace_wallet::voting::EXPECTED_VOTERS;
 
 // MAX whiteroom members for validators
@@ -36,7 +36,19 @@ impl SyncLists {
     }
 
     fn clear_validators(&mut self) {
-        self.validators = Whiteroom::new();
+        let mut new_validators = Whiteroom::new();
+
+        if let Some(proposal) = self.proposed.proposal() {
+            // For each member, if the member has the same block as the proposal
+            // add that member
+            for member in self.validators.owned_members() {
+                if member.validator().header().id() == proposal.block().id() {
+                    new_validators.add_member(member).unwrap();
+                }
+            }
+        }
+
+        self.validators = new_validators;
     }
 }
 
