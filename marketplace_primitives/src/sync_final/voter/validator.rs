@@ -48,6 +48,11 @@ impl Validator {
     pub fn pk(&self) -> &[u8] {
         self.proof.pk()
     }
+
+    // Get header
+    pub fn header(&self) -> &BlockHeader {
+        &self.header
+    }
 }
 
 impl Voter for Validator {

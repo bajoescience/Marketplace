@@ -343,7 +343,7 @@ impl<B: Balances> Blockchain<B> {
     }
 
     // Get latetst block header
-    fn latest_header(&self) -> StdResult<BlockHeader> {
+    pub fn latest_header(&self) -> StdResult<BlockHeader> {
         let metadata;
         {
             metadata = self.db_read()
@@ -372,10 +372,8 @@ impl<B: Balances> Blockchain<B> {
 
     /// Returns the length of the chain which is the latest index + 1
     /// because epoch starts at 0.
-    pub fn len(&self) -> StdResult<u64> {
-        let len = self.latest_header()?.index();
-
-        Ok(len + 1)
+    pub fn len(&self) -> Epoch {
+        self.latest_header().unwrap().index()
     }
 
     /// Confirm block exists in database
@@ -585,7 +583,7 @@ use marketplace_wallet::Owner;
         let chain = Blockchain::init(&path, state)?;
 
         // Only one block
-        assert_eq!(chain.len()?, 1);
+        assert_eq!(chain.len(), 1);
 
         // Single block is genesis
         let genesis = Block::genesis();
@@ -603,7 +601,7 @@ use marketplace_wallet::Owner;
         let state: State<state::DefaultBalances> = State::new();
         let chain = Blockchain::init(&path, state)?;
 
-        assert!(chain.iter(chain.len()?).next().is_none());
+        assert!(chain.iter(chain.len()).next().is_none());
         assert!(chain.get_blockinfo_by_index(1)?.is_none());
 
         fs::remove_file(path)?;

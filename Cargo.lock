@@ -1611,6 +1611,7 @@ dependencies = [
  "marketplace_primitives",
  "marketplace_wallet",
  "marketplace_worker",
+ "parking_lot",
  "redb",
  "tokio",
 ]

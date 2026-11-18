@@ -37,7 +37,7 @@ use std::{any::{Any, TypeId}, cmp::Ordering, collections::HashMap, format, time:
 use marketplace_helpers::{functions, objects::{AgentResult, Epoch, ID, IdHash}};
 use marketplace_ledger::{Balances, Blockchain, Jobs, Mempool};
 use marketplace_p2p::Message;
-use marketplace_primitives::{Verify, par_exec::{Bill, Contract, JobContract, ResultPtr, TxContract, WorkPtr}, sync_final::{Block, Proposal, Proposer, Validated, Validator, voter::{Voter, validator}}};
+use marketplace_primitives::{Verify, par_exec::{Bill, Contract, JobContract, ResultPtr, TxContract, WorkPtr}, sync_final::{Block, BlockHeader, Proposal, Proposer, Validated, Validator, voter::{Voter, validator}}};
 use marketplace_wallet::{Key, Owner, voting};
 use marketplace_worker::Worker;
 use tokio::{time};
@@ -301,8 +301,35 @@ impl<B: Balances> Core<B> {
         Ok(())
     }
 
+    // Handle received block index being different
+    // from the node's block index
+    fn compare_chain(&self, header: &BlockHeader) -> AgentResult<()> {
+        let chain_tip = self.chain.len();
+
+        match chain_tip.cmp(&header.index()) {
+            Ordering::Greater => {
+                // If chain tip index header is greater than received block
+                // index, then return error
+                return Err(format!(
+                    "Error: Expired Block"
+                ))
+            },
+            Ordering::Less => {
+                // TODO: Request missing blocks
+                // staring from chain tip index
+                todo!()
+            },
+            Ordering::Equal => {
+                Ok(())
+            },
+        }
+    }
+
     // TODO: Handle received block
     async fn handle_proposer(&self, proposer: &Proposer, auth: &HashMap<ID, Key>) -> AgentResult<()> {
+        // Comapre chain first
+        self.compare_chain(proposer.block().header())?;
+
         // Get subusers and blockheader
         let subusers = self.get_subusers(proposer)?;
 
@@ -344,6 +371,9 @@ impl<B: Balances> Core<B> {
 
     // Handle received validator
     async fn handle_validator(&self, validator: &Validator, auth: &HashMap<ID, Key>) -> AgentResult<()> {
+        // Compare chain first
+        self.compare_chain(validator.header())?;
+        
         // TODO: Get subusers and blockheader
         let subusers = self.get_subusers(validator)?;
 

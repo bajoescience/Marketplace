@@ -2,8 +2,11 @@ mod proposed;
 
 pub use self::proposed::ProposedBlock;
 
-use std::{cmp::Ordering, sync::{Mutex, MutexGuard}, todo};
-use tokio::sync::Notify;
+use parking_lot::{MappedRwLockReadGuard, RwLock, RwLockReadGuard};
+pub use parking_lot::{Mutex, MutexGuard, MappedMutexGuard};
+
+use std::{cmp::Ordering, todo};
+use tokio::sync::{Notify};
 
 use marketplace_primitives::{
     par_exec::Whiteroom, sync_final::{Proposal, Proposer, Validated, blockinfo::BlockInfo},
@@ -32,18 +35,12 @@ impl SyncLists {
         }
     }
 
-    fn clear(&mut self) {
-        self.proposed = ProposedBlock::new();
-        self.validators = Whiteroom::new();
-    }
-
-    pub fn clear_validators(&mut self) {
+    fn clear_validators(&mut self) {
         self.validators = Whiteroom::new();
     }
 }
 
-pub struct Mempool {
-
+struct NotifyObject {
     // Notify object to notify when proposal is full
     proposer_notify: Notify,
 
@@ -52,35 +49,68 @@ pub struct Mempool {
 
     // Notify when validator cannot reach consensus
     validator_not_notify: Notify,
+}
+
+impl NotifyObject {
+    fn new() -> Self {
+        Self {
+            proposer_notify: Notify::new(),
+            validator_notify: Notify::new(),
+            validator_not_notify: Notify::new(),
+        }
+    }
+}
+
+pub struct Mempool {
+    // Object to notify synclist copletion
+    notify: RwLock<Option<NotifyObject>>,
 
     // Sync final lists
-    sync_lists: Mutex<SyncLists>,
+    sync_lists: Mutex<Option<SyncLists>>,
 }
 
 impl Mempool {
     pub fn new() -> Self {
         Self {
-            proposer_notify: Notify::new(),
-            validator_notify: Notify::new(),
-            validator_not_notify: Notify::new(),
-            sync_lists: Mutex::new(SyncLists::new()),
+            notify: RwLock::new(Some(NotifyObject::new())),
+            sync_lists: Mutex::new(Some(SyncLists::new())),
         }
     }
 
-    /// Lock proposal and validators as sync lists to be able to access
-    /// method returns (proposed_lock, validators_lock)
-    fn sync_lists(&self) -> MutexGuard<'_, SyncLists> {
-        self.sync_lists.lock().unwrap()
+    /// Lock sync lists to be able to access
+    fn sync_lists(&self) -> MappedMutexGuard<'_, SyncLists> {
+        MutexGuard::map(
+            self.sync_lists.lock(),
+            |list_opt| list_opt.as_mut().unwrap()
+        )
+    }
+
+    /// Acces notify as read only
+    fn notify(&self) -> MappedRwLockReadGuard<'_, NotifyObject> {
+        RwLockReadGuard::map(
+            self.notify.read(), 
+            |notify_opt| notify_opt.as_ref().unwrap()
+        )
     }
 
     /// Clear Mempool sync lists entries
     pub fn clear(&self) {
-        self.sync_lists().clear()
+        let mut list_opt = self.sync_lists.lock();
+        let mut notify_opt = self.notify.write();
+
+        // Clear objects
+        let (_, _) = (list_opt.take(), notify_opt.take());
+
+        // Assign new instances of objects
+        *list_opt = Some(SyncLists::new());
+        *notify_opt = Some(NotifyObject::new());
     }
 
     /// Clear only validator sync list
     pub fn clear_validators(&self) {
-        self.sync_lists().clear_validators();
+        self
+        .sync_lists()
+        .clear_validators();
     }
 }
 
@@ -90,19 +120,19 @@ impl Mempool {
     /// If proposal list is full, get the proposal
     /// to be validated
     pub async fn wait_for_full_proposal(&self) {
-        self.proposer_notify.notified().await;
+        self.notify().proposer_notify.notified().await;
     }
 
     /// If validated list has reached consensus, get blockinfo
     pub async fn wait_for_consensus_validated(&self) -> BlockInfo {
-        self.validator_notify.notified().await;
+        self.notify().validator_notify.notified().await;
 
         self.get_blockinfo().await
     }
 
     /// If validated, do something real.
     pub async fn wait_for_failed_consensus_validated(&self) {
-        self.validator_not_notify.notified().await;
+        self.notify().validator_not_notify.notified().await;
     }
 
     /// Get block info from a list of validators.
@@ -150,7 +180,7 @@ impl Mempool {
 
         // Check if proposal is full
         if proposed.is_full() {
-            self.proposer_notify.notify_one();
+            self.notify().proposer_notify.notify_one();
         }
     }
 
@@ -187,12 +217,12 @@ impl Mempool {
 
         // Check if validators has reached consensus
         if validators.is_consensus() {
-            self.validator_notify.notify_one();
+            self.notify().validator_notify.notify_one();
         }
 
         // Check if validators can reach consensus
         if !validators.can_consensus() {
-            self.validator_not_notify.notify_one();
+            self.notify().validator_not_notify.notify_one();
         }
         Ok(())
     }

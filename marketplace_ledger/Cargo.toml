@@ -15,3 +15,4 @@ chrono = "0.4.45"
 redb = "4.3.0"
 dashmap = "6.2.1"
 tokio = { version = "1", features = ["full"] }
+parking_lot = "0.12.5"
