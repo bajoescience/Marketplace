@@ -32,15 +32,19 @@
 //! `Block` message
 
 mod epoch_state;
-use std::{any::{Any, TypeId}, cmp::Ordering, collections::HashMap, format, time::Duration, todo, vec};
+use std::{any::{Any, TypeId}, cmp::Ordering, collections::HashMap, format, sync::{Arc, Mutex}, time::Duration, todo, vec};
 
-use marketplace_helpers::{functions, objects::{AgentResult, Epoch, ID, IdHash}};
+use marketplace_helpers::{functions, objects::{AgentResult, EPOCH_DURATION, Epoch, ID, IdHash, VOTER_DURATION}};
 use marketplace_ledger::{Balances, Blockchain, Jobs, Mempool};
 use marketplace_p2p::Message;
-use marketplace_primitives::{Verify, par_exec::{Bill, Contract, JobContract, ResultPtr, TxContract, WorkPtr}, sync_final::{Block, BlockHeader, Proposal, Proposer, Validated, Validator, voter::{Voter, validator}}};
+use marketplace_primitives::{
+    Verify, 
+    par_exec::{Bill, Contract, JobContract, ResultPtr, TxContract, WorkPtr}, 
+    sync_final::{Block, BlockHeader, Proposal, Proposer, Validated, Validator, voter::{Voter}}
+};
 use marketplace_wallet::{Key, Owner, voting};
 use marketplace_worker::Worker;
-use tokio::{time};
+use tokio::{task::JoinHandle, time};
 
 /// This is the `Core` data structure that manages the state of the Marketplace node.
 /// 
@@ -50,7 +54,7 @@ use tokio::{time};
 /// The `Core` data structure methods handle incoming messages from the network
 /// by validating the messages, and handing them over to the appropiate 
 /// state data structure (block chain or mempool) to handle.
-pub struct Core<B: Balances> {
+pub struct Core<B: Balances + Send + Sync> {
     // Blockchain representing dead state
     chain: Blockchain<B>,
 
@@ -65,12 +69,11 @@ pub struct Core<B: Balances> {
     // Node authentication
     owner: Owner,
 
-    // Internal state for changing stages in epoch
-    // from proposal to validator to the next epoch
-    // epoch_state: Option<Box<dyn EpochState>>
+    // Sync final future
+    sync_final: Mutex<Option<JoinHandle<()>>>
 }
 
-impl<B: Balances> Core<B> {
+impl<B: Balances + Send + Sync + 'static> Core<B> {
     /// Initialize a new `Core` object
     /// which comprises of initializing the 
     /// `Live`, `Dead`, and Financial states.
@@ -81,7 +84,7 @@ impl<B: Balances> Core<B> {
     /// 
     /// The `owner` is used to authenticate a node, and it is used to vote
     /// as proposer or validator of blocks on the network.
-    pub fn new(chain: Blockchain<B>, owner: Owner) -> Self {
+    pub fn new(chain: Blockchain<B>, owner: Owner) -> Arc<Self> {
         // Initialize the blockchain as the dead state
 
         // TODO: Update chain with blocks from network first
@@ -96,12 +99,40 @@ impl<B: Balances> Core<B> {
 
         // A Worker is also included to execute jobs
         // and solve whiteroom challenges.
-        Self {
+        let core = Arc::new(Self {
             chain,
             jobs,
             mempool,
             owner,
-        }
+            sync_final: Mutex::new(None),
+        });
+
+        let core_clone = Arc::clone(&core);
+        let handle = tokio::spawn(async move {
+            core_clone.handle_sync_final().await;
+        });
+
+        *core.sync_final.lock().unwrap() = Some(handle);
+
+        core
+    }
+
+    /// Reset Sync task by replacing it with a fresh task
+    /// aborting the old one.
+    pub async fn reset_sync(self: Arc<Self>) {
+        // Get sync task handle
+        let mut handle_guard = self.sync_final.lock().unwrap();
+
+        // Take handle whch should always be Some
+        let handle = handle_guard.take().unwrap();
+        handle.abort();
+
+        // Assign new version of task
+        let core_clone = Arc::clone(&self);
+
+        *handle_guard = Some(tokio::spawn(async move {
+            core_clone.handle_sync_final().await;
+        }));
     }
 
     /// Handle `Messages` from the network and update `Core` state based on the type of message.
@@ -178,7 +209,7 @@ impl<B: Balances> Core<B> {
 
 
 // Handle network messages
-impl<B: Balances> Core<B> {
+impl<B: Balances + Send + Sync> Core<B> {
     /// ## Work Pointer Handler
     /// 
     /// A `Work Pointer` is sent to the network to initialize a `Job` similar to a Job post.
@@ -357,7 +388,7 @@ impl<B: Balances> Core<B> {
 
 
             // Add proposal to mempool and update subusers
-            mempool.add_proposal(proposal, subusers);
+            mempool.add_proposal(proposal, subusers).await;
 
             // If subusers count is more than threshold, vote on block
             // as validator
@@ -386,7 +417,7 @@ impl<B: Balances> Core<B> {
             let validated = Validated::new(validator.clone(), subusers, auth.clone());
 
             // Add validated to mempool and update subusers
-            mempool.add_validator(validated)?;
+            mempool.add_validator(validated).await?;
 
             Ok(())
         } else {
@@ -401,11 +432,15 @@ impl<B: Balances> Core<B> {
 }
 
 // Handle methods for blocks
-impl<T: Balances> Core<T> {
+impl<T: Balances + Send + Sync> Core<T> {
     /// Validate block, and ensure every contract is valid, and can be gotten from state
     pub fn validate_block(&self, block: &Block) -> AgentResult<()> {
-        // TODO: Check block index and match against local blockchain
-        let cache = self.chain.cache();
+        // Check block index and match against local blockchain
+        if self.chain.len() != block.index() {
+            return Err(format!(
+                "Error: Block index is not the next in chain"
+            ))
+        }
 
         for ctr in block.iter() {
             // Verify contract
@@ -414,7 +449,7 @@ impl<T: Balances> Core<T> {
             // If contract exists in cache, the contract 
             // is already valid with respect to utxo state.
             // Move on!
-            let None = cache.get(&ctr.id()) else {
+            let None = self.chain.cache().get(&ctr.id()) else {
                 continue;
             };
 
@@ -530,7 +565,7 @@ impl<T: Balances> Core<T> {
 }
 
 // Handle async methods that can be spawned as tasks
-impl<T: Balances> Core<T> {
+impl<T: Balances + Send + Sync> Core<T> {
     /// This is the action to be taken every epoch by the marketplace node.
     /// 
     /// This method takes a list of finalized `Contracts` from the network
@@ -553,7 +588,7 @@ impl<T: Balances> Core<T> {
 
         loop {
             // Wait for epoch time
-            time::sleep(Duration::from_secs(20u64)).await;
+            time::sleep(Duration::from_millis(EPOCH_DURATION)).await;
 
             // Handle epoch
             self.handle_epoch();
@@ -567,7 +602,7 @@ impl<T: Balances> Core<T> {
             // Wait up to time limit for a full proposal, after grap whatever
             // proposal is available
             let _ = time::timeout(
-                Duration::from_secs(20u64), 
+                Duration::from_millis(VOTER_DURATION), 
                 mempool.wait_for_full_proposal()
             ).await;
 
@@ -583,7 +618,7 @@ impl<T: Balances> Core<T> {
 
                 // Race consensus success against consensus failure, bounded by a timeout limit
                 let outcome = time::timeout(
-                    Duration::from_secs(20), 
+                    Duration::from_millis(VOTER_DURATION), 
                     async {
                         tokio::select! {
                             blockinfo = mempool.wait_for_consensus_validated() => Some(blockinfo),
@@ -596,12 +631,372 @@ impl<T: Balances> Core<T> {
                     break blockinfo;
                 }
 
+                // Clear validator list to start loop again
                 mempool.clear_validators();
             };
 
             // Add blockinfo to blockchain
             self.chain.publish_blockinfo(blockinfo).unwrap()
-
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::{
+        fs,
+        sync::{Arc, Barrier, mpsc},
+        thread,
+        time::Duration,
+    };
+    use std::collections::HashMap;
+
+    use marketplace_helpers::objects::{AgentResult, IdHash, WU};
+    use marketplace_ledger::{
+        Blockchain, DefaultBalances, State,
+    };
+    use marketplace_p2p::Message;
+    use marketplace_primitives::{
+        par_exec::{
+            Bill, Contract, ExecuteTime, JobContract, Tx, TxContract,
+            TxIdentifier, TxOpt, TxOptRef, WorkPtr,
+        },
+        sync_final::{Block, BlockBody, BlockHeader},
+    };
+    use marketplace_wallet::Owner;
+
+    use super::Core;
+
+    fn test_db(name: &str) -> std::path::PathBuf {
+        let path = std::env::temp_dir().join(format!(
+            "marketplace_core_{name}_{}_{:?}.db",
+            std::process::id(),
+            std::thread::current().id()
+        ));
+        let _ = fs::remove_file(&path);
+        path
+    }
+
+    fn core(
+        name: &str,
+    ) -> (
+        std::path::PathBuf,
+        tokio::runtime::Runtime,
+        Arc<Core<DefaultBalances>>,
+    ) {
+        let path = test_db(name);
+        let chain = Blockchain::init(
+            &path,
+            State::<DefaultBalances>::new(),
+        ).unwrap();
+
+        let runtime = tokio::runtime::Runtime::new().unwrap();
+        let _runtime_guard = runtime.enter();
+        let core = Core::new(chain, Owner::new_sig());
+
+        (path, runtime, core)
+    }
+
+    fn work_job(owner: &Owner, address: u8) -> JobContract {
+        let work = WorkPtr::new(
+            [address; 32],
+            marketplace_helpers::objects::WorkSize::build(
+                WU::try_from(10_000).unwrap()
+            ).unwrap(),
+            vec![TxOptRef::new([255; 32], 0)],
+            owner.as_wr_lock(),
+            BlockHeader::genesis(),
+            ExecuteTime::NOW,
+        );
+        JobContract::new(work)
+    }
+
+    fn fund_owner(
+        core: &Core<DefaultBalances>,
+        owner: &Owner,
+        amount: WU,
+    ) -> TxOptRef {
+        let funding_tx = Tx::new(
+            0,
+            TxIdentifier::COIN,
+            None,
+            Some(vec![TxOpt::new(owner.as_lock(), amount)]),
+        );
+        let reference = TxOptRef::new(funding_tx.id(), 0);
+        core.chain.state().put_opts(&funding_tx);
+        reference
+    }
+
+    fn spending_bill(reference: TxOptRef, owner: &Owner, amount: WU) -> Bill {
+        Bill::new(vec![Tx::new(
+            1,
+            TxIdentifier::COIN,
+            Some(vec![reference]),
+            Some(vec![TxOpt::new(owner.as_lock(), amount)]),
+        )])
+    }
+
+    #[test]
+    fn empty_block_validates_and_does_not_mutate_state() {
+        let (path, _runtime, core) = core("validate_empty");
+        let block = Block::new(
+            &BlockHeader::genesis(),
+            BlockBody::new(Vec::new()),
+        );
+
+        assert!(core.validate_block(&block).is_ok());
+        fs::remove_file(path).unwrap();
+    }
+
+    #[test]
+    fn invalid_transaction_contract_is_rejected_by_validate_block() {
+        let (path, _runtime, core) = core("validate_invalid_tx");
+        let owner = Owner::new_sig();
+        let tx = Tx::new(
+            1,
+            TxIdentifier::COIN,
+            None,
+            Some(vec![TxOpt::new(owner.as_lock(), WU::try_from(1_000).unwrap())]),
+        );
+        let tx_contract = TxContract::new(Bill::new(vec![tx]));
+        let block = Block::new(
+            &BlockHeader::genesis(),
+            BlockBody::new(vec![Contract::TX(tx_contract)]),
+        );
+
+        assert!(core.validate_block(&block).is_err());
+        fs::remove_file(path).unwrap();
+    }
+
+    #[test]
+    fn equal_chain_header_is_accepted() {
+        let (path, _runtime, core) = core("compare_equal");
+        let header = BlockHeader::new(
+            &BlockHeader::genesis(),
+            &BlockBody::new(Vec::new()),
+        );
+
+        assert!(core.compare_chain(&header).is_ok());
+        fs::remove_file(path).unwrap();
+    }
+
+    #[test]
+    fn expired_chain_header_is_rejected() {
+        let (path, _runtime, core) = core("compare_expired");
+
+        let err = core
+            .compare_chain(&BlockHeader::genesis())
+            .unwrap_err();
+        assert_eq!(err, "Error: Expired Block");
+        fs::remove_file(path).unwrap();
+    }
+
+    #[test]
+    #[should_panic]
+    fn missing_blocks_todo_still_panic_until_implemented() {
+        let (path, _runtime, core) = core("compare_missing");
+        let future_header = Block::new(
+            &BlockHeader::genesis(),
+            BlockBody::new(Vec::new()),
+        );
+        let another_future_header = BlockHeader::new(
+            &future_header.header(),
+            &BlockBody::new(Vec::new()),
+        );
+
+        let _ = core.compare_chain(&another_future_header);
+        fs::remove_file(path).unwrap();
+    }
+
+    #[test]
+    fn unknown_message_type_is_rejected() {
+        let (path, _runtime, core) = core("unknown_message");
+        let owner = Owner::new_sig();
+        let tx = Tx::new(
+            1,
+            TxIdentifier::COIN,
+            Some(vec![TxOptRef::new([1; 32], 0)]),
+            Some(vec![TxOpt::new(owner.as_lock(), WU::try_from(1_000).unwrap())]),
+        );
+        let message = Message::new(tx);
+
+        let runtime = tokio::runtime::Runtime::new().unwrap();
+        let result = runtime.block_on(core.handle_message(&message));
+
+        assert_eq!(result.unwrap_err(), "Error: Invalid State transition Message");
+        fs::remove_file(path).unwrap();
+    }
+
+    #[test]
+    fn handle_epoch_moves_pending_jobs_to_chain_cache() {
+        let (path, _runtime, core) = core("handle_epoch");
+        let owner = Owner::new_sig();
+        let job = work_job(&owner, 23);
+        let id = job.id();
+
+        core.jobs.add_contract(job, Vec::new());
+        core.jobs.handle_consensus(id);
+        core.handle_epoch();
+
+        assert!(core.jobs.get_job(&id).is_err());
+        assert!(core.chain.take_ctr(id).is_some());
+        fs::remove_file(path).unwrap();
+    }
+
+    #[test]
+    fn handle_bill_adds_transaction_contract_to_cache() -> AgentResult<()> {
+        let (path, _runtime, core) = core("handle_bill");
+        let bill = Bill::genesis();
+        let tx_contract = TxContract::new_with_auth(bill.clone(), HashMap::new());
+        let id = Contract::TX(tx_contract).id();
+
+        core.handle_bill(&bill, &HashMap::new())?;
+        assert!(core.chain.take_ctr(id).is_some());
+        fs::remove_file(path).unwrap();
+        Ok(())
+    }
+
+    #[test]
+    fn no_proposal_or_validator_is_returned_without_selection() {
+        let (path, _runtime, core) = core("selection_none");
+
+        assert!(core.finalize_block(None).is_none());
+        assert!(core.propose_block().is_none());
+        fs::remove_file(path).unwrap();
+    }
+
+    #[test]
+    fn concurrent_core_operations_make_progress_without_deadlock() {
+        let (path, _runtime, core) = core("concurrency");
+        let core = Arc::new(core);
+        let workers = 8;
+        let barrier = Arc::new(Barrier::new(workers + 1));
+        let (sender, receiver) = mpsc::channel();
+        let mut handles = Vec::new();
+
+        for worker in 0..workers {
+            let core = Arc::clone(&core);
+            let barrier = Arc::clone(&barrier);
+            let sender = sender.clone();
+            handles.push(thread::spawn(move || {
+                barrier.wait();
+                for iteration in 0..100 {
+                    let block = Block::new(
+                        &BlockHeader::genesis(),
+                        BlockBody::new(Vec::new()),
+                    );
+                    let _ = core.validate_block(&block);
+                    core.handle_epoch();
+                    let _ = core.finalize_block(None);
+                    let _ = (worker, iteration);
+                }
+                sender.send(()).unwrap();
+            }));
+        }
+        drop(sender);
+
+        barrier.wait();
+        for _ in 0..workers {
+            receiver
+                .recv_timeout(Duration::from_secs(5))
+                .expect("concurrent Core operations deadlocked");
+        }
+        for handle in handles {
+            handle.join().expect("concurrent Core worker panicked");
+        }
+
+        fs::remove_file(path).unwrap();
+    }
+
+    // A bill reserves UTXOs before its contract enters the shared cache.
+    // Concurrent attempts to spend the same UTXO must have one winner and
+    // must not produce duplicate cached transaction contracts.
+    #[test]
+    fn concurrent_bills_cannot_spend_the_same_utxo() {
+        let (path, _runtime, core) = core("concurrent_bill_double_spend");
+        let owner = Owner::new_sig();
+        let amount = WU::try_from(25_000).unwrap();
+        let reference = fund_owner(&core, &owner, amount);
+        let bill = spending_bill(reference, &owner, amount);
+        let mut auth = HashMap::new();
+        auth.insert(owner.as_lock().id(), owner.sign(&bill.id()));
+        let bill = Arc::new(bill);
+        let auth = Arc::new(auth);
+
+        let workers = 2;
+        let barrier = Arc::new(Barrier::new(workers + 1));
+        let (sender, receiver) = mpsc::channel();
+        let mut handles = Vec::new();
+
+        for _ in 0..workers {
+            let core = Arc::clone(&core);
+            let bill = Arc::clone(&bill);
+            let auth = Arc::clone(&auth);
+            let barrier = Arc::clone(&barrier);
+            let sender = sender.clone();
+            handles.push(thread::spawn(move || {
+                barrier.wait();
+                sender.send(core.handle_bill(&bill, &auth).is_ok()).unwrap();
+            }));
+        }
+        drop(sender);
+
+        barrier.wait();
+        let results: Vec<_> = (0..workers)
+            .map(|_| receiver.recv_timeout(Duration::from_secs(5))
+                .expect("concurrent bill handlers deadlocked"))
+            .collect();
+        for handle in handles {
+            handle.join().expect("bill handler panicked");
+        }
+
+        assert_eq!(results.iter().filter(|result| **result).count(), 1);
+        assert_eq!(results.iter().filter(|result| !**result).count(), 1);
+        assert!(core.chain.cache().contains_key(&bill.id()));
+        assert_eq!(core.chain.gdc_balance(owner.as_lock()), WU::default());
+
+        fs::remove_file(path).unwrap();
+    }
+
+    // If a later transaction in a bill fails after an earlier transaction has
+    // reserved an input, that earlier reservation must be rolled back.
+    #[test]
+    fn failed_multi_transaction_bill_rolls_back_prior_utxo_reservations() {
+        let (path, _runtime, core) = core("bill_reservation_rollback");
+        let owner = Owner::new_sig();
+        let amount = WU::try_from(25_000).unwrap();
+        let valid_reference = fund_owner(&core, &owner, amount);
+        let missing_reference = TxOptRef::new([99; 32], 0);
+        let invalid_bill = Bill::new(vec![
+            Tx::new(
+                1,
+                TxIdentifier::COIN,
+                Some(vec![valid_reference]),
+                Some(vec![TxOpt::new(owner.as_lock(), amount)]),
+            ),
+            Tx::new(
+                1,
+                TxIdentifier::COIN,
+                Some(vec![missing_reference]),
+                Some(vec![TxOpt::new(owner.as_lock(), amount)]),
+            ),
+        ]);
+        let mut invalid_auth = HashMap::new();
+        invalid_auth.insert(owner.as_lock().id(), owner.sign(&invalid_bill.id()));
+
+        assert!(core.handle_bill(&invalid_bill, &invalid_auth).is_err());
+        assert!(core.chain.cache().is_empty());
+        assert_eq!(core.chain.gdc_balance(owner.as_lock()), amount);
+
+        let valid_bill = spending_bill(valid_reference, &owner, amount);
+        let mut valid_auth = HashMap::new();
+        valid_auth.insert(owner.as_lock().id(), owner.sign(&valid_bill.id()));
+
+        core.handle_bill(&valid_bill, &valid_auth)
+            .expect("rolled-back UTXO should be spendable");
+        assert_eq!(core.chain.gdc_balance(owner.as_lock()), WU::default());
+        assert!(core.chain.cache().contains_key(&valid_bill.id()));
+
+        fs::remove_file(path).unwrap();
     }
 }

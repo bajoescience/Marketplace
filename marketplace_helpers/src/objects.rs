@@ -6,11 +6,15 @@ use num_format::{Locale, ToFormattedString};
 
 use super::functions;
 
-/// Epoch duration time in milliseconds
-pub const EPOCH_DURATION: u64 = 10000;
-
 /// Epoch type
 pub type Epoch = u64;
+
+/// Epoch duration time in milliseconds
+pub const EPOCH_DURATION: Epoch = 1000;
+
+/// Proposal and Validator waiting duration in milliseconds
+pub const VOTER_DURATION: Epoch = 60000;
+
 
 /// Expected whiteroom Size
 pub const CONTRACT_WHITEROOM_SIZE: usize = (3 * 1) + 1;

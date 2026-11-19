@@ -110,10 +110,15 @@ impl Jobs {
 
 #[cfg(test)]
 mod tests {
-    use marketplace_helpers::objects::{IdHash, WU, WorkSize};
-    use marketplace_helpers::objects::AgentResult;
+    use std::{
+        sync::{Arc, mpsc, Barrier},
+        thread,
+        time::Duration,
+    };
+
+    use marketplace_helpers::objects::{WU, WorkSize, AgentResult};
     use marketplace_primitives::{
-        par_exec::{Contract, ExecuteTime, JobContract, TxOptRef, WorkPtr},
+        par_exec::{Contract, ExecuteTime, JobContract, TxOpt, TxOptRef, WorkPtr},
         sync_final::BlockHeader,
     };
     use marketplace_wallet::Owner;
@@ -152,8 +157,8 @@ mod tests {
 
         jobs.add_contract(job, Vec::new());
 
-        assert_eq!(jobs.get_job(&id)?.id(), id);
-        assert_eq!(jobs.get_mut_job(&id)?.id(), id);
+        assert_eq!(jobs.get_job(&id)?.value().0.id(), id);
+        assert_eq!(jobs.get_mut_job(&id)?.value().0.id(), id);
         Ok(())
     }
 
@@ -188,6 +193,135 @@ mod tests {
         jobs.handle_consensus(id);
 
         assert!(jobs.take_job(&id).is_some());
+        assert!(jobs.get_pending_jobs().is_empty());
+    }
+
+    // Taking a non-ready job should remove it and preserve its associated UTXOs.
+    #[test]
+    fn take_job_preserves_utxos_and_returns_one_owner_only() {
+        let owner = Owner::new_sig();
+        let job = job_contract(&owner, 8);
+        let id = job.id();
+        let jobs = Jobs::new();
+        let reference = TxOptRef::new([9; 32], 0);
+        let output = TxOpt::new(owner.as_lock(), WU::try_from(20_000).unwrap());
+        let utxos = vec![(reference, output)];
+
+        jobs.add_contract(job, utxos.clone());
+
+        let (_, taken_utxos) = jobs.take_job(&id).expect("job should exist");
+        assert_eq!(taken_utxos, utxos);
+        assert!(jobs.take_job(&id).is_none());
+    }
+
+    // Replacing a live job with the same work ID should replace the contract and UTXOs.
+    #[test]
+    fn adding_the_same_job_id_replaces_live_entry() {
+        let owner = Owner::new_sig();
+        let first = job_contract(&owner, 10);
+        let id = first.id();
+        let replacement = first.clone();
+        let jobs = Jobs::new();
+        let first_output = TxOpt::new(owner.as_lock(), WU::try_from(10_000).unwrap());
+        let replacement_output = TxOpt::new(owner.as_lock(), WU::try_from(20_000).unwrap());
+        let reference = TxOptRef::new([13; 32], 0);
+
+        jobs.add_contract(first, vec![(reference, first_output)]);
+        jobs.add_contract(replacement, vec![(reference, replacement_output)]);
+
+        assert_eq!(jobs.get_job(&id).unwrap().value().0.id(), id);
+        let (_, utxos) = jobs.take_job(&id).expect("replacement job should exist");
+        assert_eq!(utxos[0].1.amount(), replacement_output.amount());
+    }
+
+    // Repeated consensus handling is idempotent because the ready set is a HashSet.
+    #[test]
+    fn repeated_consensus_is_emitted_once() {
+        let owner = Owner::new_sig();
+        let job = job_contract(&owner, 11);
+        let id = job.id();
+        let jobs = Jobs::new();
+
+        jobs.add_contract(job, Vec::new());
+        jobs.handle_consensus(id);
+        jobs.handle_consensus(id);
+
+        assert_eq!(jobs.get_pending_jobs().len(), 1);
+        assert!(jobs.get_pending_jobs().is_empty());
+    }
+
+    // Marking an unknown ID ready should not panic when pending jobs are drained.
+    #[test]
+    #[should_panic(expected = "Jobcontract not found")]
+    fn handling_unknown_job_exposes_missing_contract_in_pending_collection() {
+        let jobs = Jobs::new();
+        jobs.handle_consensus([77; 32]);
+
+        assert!(jobs.get_pending_jobs().is_empty());
+    }
+
+    // Mutable job access should expose exactly the live entry and release after dropping.
+    #[test]
+    fn mutable_job_access_releases_for_later_operations() -> AgentResult<()> {
+        let owner = Owner::new_sig();
+        let job = job_contract(&owner, 12);
+        let id = job.id();
+        let jobs = Jobs::new();
+
+        jobs.add_contract(job, Vec::new());
+        {
+            let live = jobs.get_mut_job(&id)?;
+            assert_eq!(live.value().0.id(), id);
+        }
+
+        assert!(jobs.take_job(&id).is_some());
+        Ok(())
+    }
+
+    // Concurrent add/get/take/consensus operations should make bounded progress
+    // and must not deadlock on the ready-set mutex or DashMap.
+    #[test]
+    fn concurrent_job_operations_make_progress_without_deadlock() {
+        let jobs = Arc::new(Jobs::new());
+        let workers = 8;
+        let barrier = Arc::new(Barrier::new(workers + 1));
+        let (sender, receiver) = mpsc::channel();
+        let mut handles = Vec::new();
+
+        for worker in 0..workers {
+            let jobs = Arc::clone(&jobs);
+            let barrier = Arc::clone(&barrier);
+            let sender = sender.clone();
+            handles.push(thread::spawn(move || {
+                let owner = Owner::new_sig();
+                barrier.wait();
+
+                for iteration in 0..100 {
+                    let address = (worker * 100 + iteration) as u8;
+                    let job = job_contract(&owner, address);
+                    let id = job.id();
+
+                    jobs.add_contract(job, Vec::new());
+                    let _ = jobs.get_job(&id);
+                    let _ = jobs.get_mut_job(&id);
+                    let _ = jobs.take_job(&id);
+                }
+
+                sender.send(()).unwrap();
+            }));
+        }
+        drop(sender);
+
+        barrier.wait();
+        for _ in 0..workers {
+            receiver
+                .recv_timeout(Duration::from_secs(5))
+                .expect("concurrent Jobs operations deadlocked");
+        }
+        for handle in handles {
+            handle.join().expect("concurrent Jobs worker panicked");
+        }
+
         assert!(jobs.get_pending_jobs().is_empty());
     }
 }

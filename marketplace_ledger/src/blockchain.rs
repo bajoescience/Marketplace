@@ -139,7 +139,8 @@ impl<B: Balances> Blockchain<B> {
         state.get_gdc_balance(owner)
     } 
 
-    // Update state with contracts in block
+    // Update state with contracts in a finalized block
+    // block passed in must have been confirmed
     pub fn update_state_with_block(&self, block: &Block) -> AgentResult<()> {
         for ctr in block.ctrs() {
             // Remove contract from cache
@@ -373,7 +374,7 @@ impl<B: Balances> Blockchain<B> {
     /// Returns the length of the chain which is the latest index + 1
     /// because epoch starts at 0.
     pub fn len(&self) -> Epoch {
-        self.latest_header().unwrap().index()
+        self.latest_header().unwrap().index() + 1
     }
 
     /// Confirm block exists in database
@@ -477,7 +478,7 @@ impl<B: Balances> Blockchain<B> {
     /// This method takes a Block from the mempool and
     /// adds it to the chain
     pub fn publish_blockinfo(&self, blockinfo: BlockInfo) -> AgentResult<()> {
-        // Confirm and validate block
+        // Use block contracts to validate the state
         self.update_state_with_block(blockinfo.block())?;
 
         // Add block to db
@@ -518,9 +519,20 @@ use crate::state;
 // These tests exercise the blockchain lifecycle: initialization, block publication,
 // block lookup, persistence, iteration, validation, and recent-block tracking.
 use super::*;
-    use std::{assert_eq, fs, path::PathBuf, vec};
-    use marketplace_primitives::par_exec::{Bill, Tx, TxContract, TxIdentifier, TxOpt, TxOptRef};
-use marketplace_wallet::Owner;
+    use std::{
+        assert_eq, fs,
+        collections::HashMap,
+        path::PathBuf,
+        sync::{Arc, Barrier, mpsc},
+        thread,
+        time::Duration,
+        vec,
+    };
+    use marketplace_primitives::{
+        par_exec::{Bill, Tx, TxContract, TxIdentifier, TxOpt, TxOptRef, Whiteroom},
+        sync_final::{Proposal, Proposer, Validated},
+    };
+    use marketplace_wallet::Owner;
 
     fn test_db(name: &str) -> PathBuf {
         let path = std::env::temp_dir().join(format!(
@@ -530,6 +542,14 @@ use marketplace_wallet::Owner;
         ));
         let _ = fs::remove_file(&path);
         path
+    }
+
+    fn blockinfo(block: Block) -> BlockInfo {
+        let owner = Owner::new_sig();
+        let proposer = Proposer::new(&owner, block);
+        let proposal = Proposal::new(proposer, HashMap::new());
+
+        BlockInfo::new(proposal, Whiteroom::<Validated, 33>::new())
     }
 
     // Test Transaction Contract where owner sends money to another and 
@@ -643,6 +663,134 @@ use marketplace_wallet::Owner;
         assert_eq!(block.ctrs().len(), 1);
         assert!(chain.cache().get(&id).is_none());
         assert!(chain.new_block().ctrs().is_empty());
+
+        fs::remove_file(path)?;
+        Ok(())
+    }
+
+    // A cached contract can be looked up, removed exactly once, and reused by ID.
+    #[test]
+    fn cache_take_is_atomic_and_only_returns_existing_contract() -> StdResult<()> {
+        let path = test_db("cache_take");
+        let state: State<state::DefaultBalances> = State::new();
+        let chain = Blockchain::init(&path, state)?;
+        let contract = Contract::genesis();
+        let id = contract.id();
+
+        assert!(chain.take_ctr(id).is_none());
+        chain.add_ctrs(vec![contract.clone()]);
+        assert_eq!(chain.take_ctr(id).unwrap().id(), contract.id());
+        assert!(chain.take_ctr(id).is_none());
+        assert!(chain.cache().is_empty());
+
+        fs::remove_file(path)?;
+        Ok(())
+    }
+
+    // The same in-memory chain and database should survive reopening.
+    #[test]
+    fn published_block_persists_across_database_reopen() -> StdResult<()> {
+        let path = test_db("persistence");
+        let state: State<state::DefaultBalances> = State::new();
+        let chain = Blockchain::init(&path, state)?;
+        let block = chain.new_block();
+        let block_id = block.id();
+        chain.add_to_db(blockinfo(block))?;
+
+        assert_eq!(chain.len(), 2);
+        let latest = chain.latest_header()?;
+        assert!(chain.is_block(&latest)?);
+
+        drop(chain);
+        let reopened = Blockchain::init(
+            &path,
+            State::<state::DefaultBalances>::new(),
+        )?;
+
+        assert_eq!(reopened.len(), 2);
+        assert_eq!(reopened.latest_header()?.id(), block_id);
+        assert_eq!(
+            reopened.get_blockinfo_by_index(1)?.unwrap().block().id(),
+            block_id,
+        );
+
+        fs::remove_file(path)?;
+        Ok(())
+    }
+
+    // A confirmed block should remove its contracts from the cache and apply
+    // their transactions to the state. This method does not confirm the block;
+    // that is handled by publish_blockinfo before calling it.
+    #[test]
+    fn confirmed_block_consumes_cached_contract_and_updates_state() -> StdResult<()> {
+        let path = test_db("confirmed_block");
+        let state: State<state::DefaultBalances> = State::new();
+        let chain = Blockchain::init(&path, state)?;
+        let owner = Owner::new_sig();
+        let recipient = Owner::new_sig();
+        let contract = ctr(&owner, &recipient);
+        let id = contract.id();
+        chain.add_ctrs(vec![contract.clone()]);
+
+        let block = Block::new(
+            &chain.latest_header()?,
+            BlockBody::new(vec![contract]),
+        );
+
+        chain.update_state_with_block(&block)?;
+        assert!(chain.take_ctr(id).is_none());
+
+        fs::remove_file(path)?;
+        Ok(())
+    }
+
+    // Concurrent cache, state, database, and header operations must make
+    // bounded progress and must not deadlock or poison any lock.
+    #[test]
+    fn concurrent_access_makes_progress_without_deadlock() -> StdResult<()> {
+        let path = test_db("concurrency");
+        let state: State<state::DefaultBalances> = State::new();
+        let chain = Arc::new(Blockchain::init(&path, state)?);
+        let workers = 8;
+        let barrier = Arc::new(Barrier::new(workers + 1));
+        let (sender, receiver) = mpsc::channel();
+        let mut handles = Vec::new();
+
+        for worker in 0..workers {
+            let chain = Arc::clone(&chain);
+            let barrier = Arc::clone(&barrier);
+            let sender = sender.clone();
+            handles.push(thread::spawn(move || {
+                barrier.wait();
+                for iteration in 0..100 {
+                    let contract = Contract::genesis();
+                    let id = contract.id();
+                    chain.add_ctrs(vec![contract]);
+                    let _ = chain.take_ctr(id);
+
+                    let owner = Owner::new_sig();
+                    let lock = owner.as_lock();
+                    let _ = chain.gdc_balance(lock);
+                    let _ = chain.latest_header();
+                    let read = chain.db_read();
+                    let _ = read.begin_read();
+                    drop(read);
+
+                    let _ = chain.get_blockinfo_by_index((worker + iteration) as u64 % 2);
+                }
+                sender.send(()).unwrap();
+            }));
+        }
+        drop(sender);
+
+        barrier.wait();
+        for _ in 0..workers {
+            receiver.recv_timeout(Duration::from_secs(5))
+                .expect("concurrent blockchain operations deadlocked");
+        }
+        for handle in handles {
+            handle.join().expect("concurrent blockchain worker panicked");
+        }
 
         fs::remove_file(path)?;
         Ok(())
