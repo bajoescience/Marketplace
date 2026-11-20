@@ -13,7 +13,10 @@ pub struct ProposedBlock {
 
 impl ProposedBlock {
     pub fn new() -> Self {
-        Self { proposal: None, proposer_count: 0 }
+        Self {
+            proposal: None,
+            proposer_count: 0,
+        }
     }
 }
 
@@ -55,9 +58,12 @@ impl ProposedBlock {
         match &self.proposal {
             Some(current) => {
                 // The proposal with block having the greater gdc is chosen as the main proposal
-                let ordering = proposer.block().header().total_gdc().partial_cmp(
-                    &current.block().header().total_gdc()
-                ).unwrap();
+                let ordering = proposer
+                    .block()
+                    .header()
+                    .total_gdc()
+                    .partial_cmp(&current.block().header().total_gdc())
+                    .unwrap();
 
                 if let Ordering::Equal = ordering {
                     // Comapre block ids, the one with lower block id is considered greater
@@ -67,17 +73,15 @@ impl ProposedBlock {
                     if proposer_id < current_id {
                         return Ordering::Greater;
                     } else if proposer_id > current_id {
-                        return  Ordering::Less;
+                        return Ordering::Less;
                     } else {
                         return Ordering::Equal;
                     }
                 }
 
                 return ordering;
-            },
-            None => {
-                Ordering::Greater
             }
+            None => Ordering::Greater,
         }
     }
 
@@ -89,7 +93,7 @@ impl ProposedBlock {
 
 #[cfg(test)]
 mod tests {
-    use marketplace_primitives::sync_final::{Block, Proposer, Proposal};
+    use marketplace_primitives::sync_final::{Block, Proposal, Proposer};
     use marketplace_wallet::Owner;
 
     use super::ProposedBlock;

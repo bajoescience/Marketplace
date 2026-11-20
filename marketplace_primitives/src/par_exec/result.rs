@@ -1,16 +1,19 @@
-use std::{format};
+use std::format;
 
-use borsh::{BorshDeserialize, BorshSerialize};
-use marketplace_helpers::{functions, objects::{AgentResult, WorkSize}};
-use marketplace_wallet::{Lock, crypto::WRProof};
 use crate::{
     Verify,
     helpers::objects::{ID, IdHash, WorkAddr},
     par_exec::WRVote,
 };
+use borsh::{BorshDeserialize, BorshSerialize};
+use marketplace_helpers::{
+    functions,
+    objects::{AgentResult, WorkSize},
+};
+use marketplace_wallet::{Lock, crypto::WRProof};
 
 /// # Result Info
-/// 
+///
 /// `Result Info` contains information on a execution result all
 /// whiteroom members should agree on.
 #[derive(BorshSerialize, BorshDeserialize, Debug, Clone)]
@@ -25,10 +28,7 @@ pub struct ResultInfo {
 impl ResultInfo {
     // New result
     pub fn new(opt_hash: ID, spent: WorkSize) -> Self {
-        Self {
-            opt_hash,
-            spent
-        }
+        Self { opt_hash, spent }
     }
 
     pub fn opt_hash(&self) -> ID {
@@ -47,50 +47,50 @@ impl PartialEq for ResultInfo {
 }
 
 /// # Result Pointer `ResultPtr`
-/// 
+///
 /// The `ResultPtr` is a pointer like type used by whiteroom members
 /// to reference the result of a work execution stored on a decentralized storage newtork.
-/// 
+///
 /// The `ResultPtr` also references the work ID which is the hash of the `WorkPtr`
-/// 
+///
 /// ## Examples
-/// 
+///
 /// **NOTE: The values used in this example are dummy values**
-/// 
+///
 /// ```
 /// use marketplace_primitives::{par_exec::{ResultInfo, ResultPtr}, Verify};
 /// use marketplace_helpers::objects::{WU, IdHash, WorkSize};
 /// use marketplace_wallet::{crypto::Crypto, Owner};
-/// 
+///
 /// // Hash of WorkPtr
 /// let work_id = [25u8; 32];
 /// let work_size = WU::try_from(20000).unwrap();
-/// 
+///
 /// // Whiteroom member
 /// let owner = Owner::new_sig();
-/// 
+///
 /// // Result Information
 /// let result = ResultInfo::new(
-///     [25u8; 32], 
+///     [25u8; 32],
 ///     WorkSize::build(work_size).unwrap()
 /// );
-/// 
+///
 /// // Address of result on decentralized storage network
 /// let res_addr = [25u8; 32];
-/// 
+///
 /// // Proof of whiteroom membership
-/// // which must be less than the epoch's 
+/// // which must be less than the epoch's
 /// // VRF threshold
 /// let crypto = Crypto::new(&owner);
 /// let wr_proof = crypto
 ///     .attempt_wr(
 ///         // Job seed (see Crypto module)
-///         &[25u8; 32], 
-/// 
+///         &[25u8; 32],
+///
 ///         // VDF difficulty (see Crypto module)
 ///         20)
 ///     .unwrap();
-/// 
+///
 /// let mut resultptr = ResultPtr::new(
 ///     work_id,
 ///     result,
@@ -100,7 +100,7 @@ impl PartialEq for ResultInfo {
 /// );
 /// // Verify it's a valid Result pointer
 /// assert!(resultptr.verify().is_ok());
-/// 
+///
 /// ```
 // Pointer to work output
 #[derive(BorshSerialize, BorshDeserialize, Debug, Clone)]
@@ -127,7 +127,7 @@ impl ResultPtr {
     // This is to indicate they have the same result
     pub fn is_same(&self, other: &Self) -> bool {
         if self.result == other.result {
-            return true
+            return true;
         }
 
         false
@@ -143,15 +143,15 @@ impl PartialEq for ResultPtr {
 
 impl ResultPtr {
     /// Create a new `ResultPtr`
-    /// 
+    ///
     /// # Examples
-    /// 
+    ///
     /// **See ResultPtr docs**
     pub fn new(
         work_id: ID,
-        result: ResultInfo, 
+        result: ResultInfo,
         wr_proof: WRProof,
-        res_addr: WorkAddr, 
+        res_addr: WorkAddr,
         witness: Lock,
     ) -> Self {
         Self {
@@ -172,7 +172,7 @@ impl ResultPtr {
 
     pub fn result(&self) -> &ResultInfo {
         &self.result
-    } 
+    }
 
     pub fn wr_proof(&self) -> &WRProof {
         &self.wr_proof
@@ -188,35 +188,33 @@ impl ResultPtr {
 }
 
 // Setter methods
-impl ResultPtr {
-    
-}
+impl ResultPtr {}
 
 /// The ResultPtr proof is verified later
 /// but as long as the whiteroom member is known
 /// and used to sign the message, we can use that
-/// member id later in the proof. 
+/// member id later in the proof.
 impl Verify for ResultPtr {
     /// NOTE: Whiteroom proof is verified by contract
     /// So this method does not fully validate the ResultPtr instance
     /// as the WorkPtr and BlockHeader is needed
-    /// 
-    /// To fully validate it, use a Contract instance with the 
+    ///
+    /// To fully validate it, use a Contract instance with the
     /// method Contract.validate_result(ResultPtr)
     fn verify(&self) -> AgentResult<()> {
-        // Ensure whiteroom owns the proof        
+        // Ensure whiteroom owns the proof
         let witness = self.witness();
 
         let Lock::WHITEROOM(pk_hash) = witness else {
             return Err(format!(
                 "Error: Whiteroom Tx input must locked by Whiteroom",
-            ))
+            ));
         };
 
         if pk_hash != functions::hash(self.wr_proof().pk_bytes()) {
             return Err(format!(
                 "Error: Whiteroom tx owner not the same as proof owner"
-            ))
+            ));
         }
 
         Ok(())
@@ -237,20 +235,22 @@ impl WRVote for ResultPtr {
 
 #[cfg(test)]
 mod tests {
-    use std::{assert_eq};
-    use marketplace_helpers::{functions::dum_bytes, objects::{VRF_T, WU}};
-    use marketplace_wallet::{Owner, crypto::Crypto};
     use super::*;
+    use marketplace_helpers::{
+        functions::dum_bytes,
+        objects::{VRF_T, WU},
+    };
+    use marketplace_wallet::{Owner, crypto::Crypto};
+    use std::assert_eq;
 
     pub fn wr_proof(owner: &Owner, vrf_t: VRF_T) -> WRProof {
         let crypto = Crypto::new(owner);
-        crypto.attempt_wr(
-            &dum_bytes(), 
-            functions::vdf_difficulty(
-                WU::try_from(300000).unwrap(),
-                vrf_t
+        crypto
+            .attempt_wr(
+                &dum_bytes(),
+                functions::vdf_difficulty(WU::try_from(300000).unwrap(), vrf_t),
             )
-        ).unwrap()
+            .unwrap()
     }
 
     fn res_ptr(spent: WorkSize, owner: &Owner, wr_proof: WRProof) -> ResultPtr {
@@ -263,7 +263,7 @@ mod tests {
             dum_bytes(),
             result,
             wr_proof,
-            dum_bytes(),  
+            dum_bytes(),
             owner.as_wr_lock(),
         )
     }
@@ -278,20 +278,11 @@ mod tests {
         let spent = WorkSize::build(WU::try_from(20000).unwrap()).unwrap();
         let result = ResultInfo::new(result_hash, spent);
         let proof = wr_proof(&owner, [2; 32]);
-        let result_ptr = ResultPtr::new(
-            work_id,
-            result,
-            proof,
-            address,
-            owner.as_wr_lock(),
-        );
+        let result_ptr = ResultPtr::new(work_id, result, proof, address, owner.as_wr_lock());
 
         assert_eq!(result_ptr.work_id(), work_id);
         assert_eq!(result_ptr.result().opt_hash(), result_hash);
-        assert_eq!(
-            result_ptr.result().spent().into(),
-            spent.into()
-        );
+        assert_eq!(result_ptr.result().spent().into(), spent.into());
         assert_eq!(result_ptr.res_addr(), &address);
         assert_eq!(result_ptr.witness(), owner.as_wr_lock());
         assert_eq!(result_ptr.as_vote(), result_ptr.result().id());
@@ -341,11 +332,7 @@ mod tests {
         // Prove ownership of two whiteroom inputs using VDF + VRF
         // and build res_ptr
         let wr_proof = wr_proof(&owner, [2; 32]);
-        let resptr = res_ptr(
-            WorkSize::build(spent).unwrap(), 
-            &owner, 
-            wr_proof
-        );
+        let resptr = res_ptr(WorkSize::build(spent).unwrap(), &owner, wr_proof);
 
         resptr.verify()
     }
@@ -363,14 +350,10 @@ mod tests {
         let spent = WU::try_from(20000).unwrap();
 
         // Prove ownership of two whiteroom inputs using VDF + VRF
-        // and build res_ptr but 
+        // and build res_ptr but
         // build WRproof with false owner
         let wr_proof = wr_proof(&f_owner, [2; 32]);
-        let resptr = res_ptr(
-            WorkSize::build(spent).unwrap(), 
-            &wr_owner, 
-            wr_proof
-        );
+        let resptr = res_ptr(WorkSize::build(spent).unwrap(), &wr_owner, wr_proof);
 
         let err = resptr.verify().unwrap_err();
 

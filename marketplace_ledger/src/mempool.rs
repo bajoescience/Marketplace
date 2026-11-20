@@ -2,16 +2,19 @@ mod proposed;
 
 pub use self::proposed::ProposedBlock;
 
-pub use parking_lot::{Mutex, MutexGuard, MappedMutexGuard};
+pub use parking_lot::{MappedMutexGuard, Mutex, MutexGuard};
 
 use std::{cmp::Ordering, todo};
 use tokio::sync::{Notify, RwLock, RwLockReadGuard};
 
 use marketplace_primitives::{
-    par_exec::Whiteroom, sync_final::{Proposal, Proposer, Validated, blockinfo::BlockInfo},
+    par_exec::Whiteroom, sync_final::{Proposal, Proposer, Validated, blockinfo::BlockInfo, voter::Voter},
 };
 
-use marketplace_helpers::{functions, objects::{AgentResult, IdHash}};
+use marketplace_helpers::{
+    functions,
+    objects::{AgentResult, IdHash},
+};
 use marketplace_wallet::voting::EXPECTED_VOTERS;
 
 // MAX whiteroom members for validators
@@ -20,7 +23,7 @@ const WHITEROOM_MAX: usize = functions::max_wr_size_from_expected(EXPECTED_VOTER
 /// Contains
 struct SyncLists {
     // Handle proposal
-    proposed: ProposedBlock, 
+    proposed: ProposedBlock,
 
     // Validators
     validators: Whiteroom<Validated, WHITEROOM_MAX>,
@@ -90,20 +93,16 @@ impl Mempool {
 
     /// Lock sync lists to be able to access
     fn sync_lists(&self) -> MappedMutexGuard<'_, SyncLists> {
-        MutexGuard::map(
-            self.sync_lists.lock(),
-            |list_opt| list_opt.as_mut().unwrap()
-        )
+        MutexGuard::map(self.sync_lists.lock(), |list_opt| {
+            list_opt.as_mut().unwrap()
+        })
     }
 
     /// Acces notify as read only
     async fn notify(&self) -> RwLockReadGuard<'_, NotifyObject> {
         let guard = self.notify.read().await;
 
-        RwLockReadGuard::map(
-            guard, 
-            |notify_opt| notify_opt.as_ref().unwrap()
-        )
+        RwLockReadGuard::map(guard, |notify_opt| notify_opt.as_ref().unwrap())
     }
 
     /// Clear Mempool sync lists entries
@@ -121,19 +120,16 @@ impl Mempool {
 
     /// Clear only validator sync list
     pub fn clear_validators(&self) {
-        self
-        .sync_lists()
-        .clear_validators();
+        self.sync_lists().clear_validators();
     }
 }
 
-// Async methods 
+// Async methods
 // some check for full proposal or validator list
 impl Mempool {
     /// If proposal list is full, get the proposal
     /// to be validated
     pub async fn wait_for_full_proposal(&self) {
-
         self.notify().await.proposer_notify.notified().await
     }
 
@@ -152,9 +148,7 @@ impl Mempool {
     /// Get block info from a list of validators.
     /// If the mempool does not contain the chosen block
     /// fetch it from the network by request.
-    pub async fn get_blockinfo(
-        &self,
-    ) -> BlockInfo {
+    pub async fn get_blockinfo(&self) -> BlockInfo {
         // Validators
         let validators = self.get_validators();
 
@@ -172,10 +166,7 @@ impl Mempool {
             todo!()
         }
 
-        BlockInfo::new(
-            proposal.clone(), 
-            validators
-        )
+        BlockInfo::new(Some(proposal.clone()), validators)
     }
 }
 
@@ -253,9 +244,7 @@ mod tests {
 
     use marketplace_primitives::{
         par_exec::WRVote,
-        sync_final::{
-            Block, BlockBody, BlockHeader, Proposal, Proposer, Validated, Validator,
-        },
+        sync_final::{Block, BlockBody, BlockHeader, Proposal, Proposer, Validated, Validator},
     };
     use marketplace_wallet::Owner;
     use marketplace_wallet::voting::EXPECTED_VOTERS;
@@ -270,8 +259,8 @@ mod tests {
 
     fn validated_for(proposer: &Proposer) -> Validated {
         let owner = Owner::new_sig();
-        let seed = proposer.block().header().prev();
-        let validator = Validator::new(&owner, &seed, proposer);
+        let header = proposer.block().header();
+        let validator = Validator::new(&owner,  *header);
 
         Validated::new(validator, 1, HashMap::new())
     }
@@ -392,14 +381,8 @@ mod tests {
             .await
             .expect("retained validator should be accepted");
 
-        let next_header = BlockHeader::new(
-            &BlockHeader::genesis(),
-            &BlockBody::new(Vec::new()),
-        );
-        let next_block = Block::new(
-            &next_header,
-            BlockBody::new(Vec::new()),
-        );
+        let next_header = BlockHeader::new(&BlockHeader::genesis(), &BlockBody::new(Vec::new()));
+        let next_block = Block::new(&next_header, BlockBody::new(Vec::new()));
         let mismatched_proposer = Proposer::new(&owner, next_block);
         mempool
             .add_validator(validated_for(&mismatched_proposer))
@@ -410,9 +393,11 @@ mod tests {
 
         let validators = mempool.get_validators();
         assert_eq!(validators.len(), 1);
-        assert!(validators
-            .members()
-            .all(|vote| vote.as_vote() == retained_proposer.block().id()));
+        assert!(
+            validators
+                .members()
+                .all(|vote| vote.as_vote() == retained_proposer.block().id())
+        );
     }
 
     // Duplicate validators should be rejected without deadlock or a second insertion.
@@ -428,9 +413,7 @@ mod tests {
             .await
             .expect("first validator should be accepted");
 
-        let duplicate = mempool
-            .add_validator(validated)
-            .await;
+        let duplicate = mempool.add_validator(validated).await;
 
         assert!(duplicate.is_err());
         assert_eq!(mempool.get_validators().len(), 1);
@@ -448,8 +431,8 @@ mod tests {
             let mempool = Arc::clone(&mempool);
             let sender = sender.clone();
             tasks.push(thread::spawn(move || {
-                let runtime = tokio::runtime::Runtime::new()
-                    .expect("failed to create Tokio runtime");
+                let runtime =
+                    tokio::runtime::Runtime::new().expect("failed to create Tokio runtime");
 
                 runtime.block_on(async {
                     mempool.add_proposal(proposal(), 1).await;

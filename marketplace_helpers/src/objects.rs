@@ -1,4 +1,11 @@
-use std::{error::Error, fmt, format, iter::Sum, ops::{Add, Div, Mul, Sub}, time::Duration, write};
+use std::{
+    error::Error,
+    fmt, format,
+    iter::Sum,
+    ops::{Add, Div, Mul, Sub},
+    time::Duration,
+    write,
+};
 
 use borsh::{BorshDeserialize, BorshSerialize};
 
@@ -14,7 +21,6 @@ pub const EPOCH_DURATION: Epoch = 1000;
 
 /// Proposal and Validator waiting duration in milliseconds
 pub const VOTER_DURATION: Epoch = 60000;
-
 
 /// Expected whiteroom Size
 pub const CONTRACT_WHITEROOM_SIZE: usize = (3 * 1) + 1;
@@ -32,36 +38,36 @@ pub enum ValueError {
 }
 
 /// # Work Units `WU`
-/// 
+///
 /// `WU` the standard integer mesaurement in the marketplace.
-/// 
-/// ## Goldbar () 
-/// 
+///
+/// ## Goldbar ()
+///
 /// 1 gdb = 3 * 10^15 WU
-/// 
+///
 /// ```
 /// use marketplace_helpers::objects::WU;
-/// 
+///
 /// let one_gdb = WU::GDB();
 /// ```
-/// 
+///
 /// ## Goldcoin (gdc)
-/// 
+///
 /// 1 gdc = 3 * 10^12 WU
-/// 
+///
 /// ```
 /// use marketplace_helpers::objects::WU;
-/// 
+///
 /// let one_gdc = WU::GDC();
 /// ```
-/// 
+///
 /// ## Goldscent (gds)
-/// 
+///
 /// 1 gds = 3 * 10^9 WU
-/// 
+///
 /// ```
 /// use marketplace_helpers::objects::WU;
-/// 
+///
 /// let one_gds = WU::GDS();
 /// ```
 
@@ -77,7 +83,7 @@ impl WU {
     pub fn single() -> WU {
         WU(1)
     }
-    
+
     pub fn ten_fold(&self) -> Self {
         Self(self.0 * 10)
     }
@@ -101,17 +107,17 @@ impl WU {
 // The default value of WU is 0
 impl Default for WU {
     /// Returns default value 0
-    /// 
+    ///
     /// # Example
-    /// 
+    ///
     /// ```
     /// use marketplace_helpers::objects::WU;
-    /// 
+    ///
     /// let x = WU::default();
-    /// 
+    ///
     /// assert_eq!(x, WU::try_from(0).unwrap());
     /// ```
-    
+
     fn default() -> Self {
         WU(0)
     }
@@ -127,7 +133,7 @@ impl TryFrom<u128> for WU {
     type Error = ValueError;
     fn try_from(value: u128) -> Result<Self, Self::Error> {
         if value > u128::MAX {
-            return Err(ValueError::ExceedsMaximum)
+            return Err(ValueError::ExceedsMaximum);
         }
 
         Ok(Self(value))
@@ -147,7 +153,7 @@ impl Sub for WU {
 
     fn sub(self, rhs: Self) -> Self::Output {
         Self(self.0 - rhs.0)
-    }    
+    }
 }
 
 impl Mul for WU {
@@ -168,10 +174,7 @@ impl Div for WU {
 
 impl Sum for WU {
     fn sum<I: Iterator<Item = Self>>(iter: I) -> Self {
-        iter.fold(
-            WU::default(),
-            |sum, val| sum + val
-        )
+        iter.fold(WU::default(), |sum, val| sum + val)
     }
 }
 
@@ -201,7 +204,7 @@ pub trait IdHash: Sized {
 }
 
 impl<T> IdHash for T
-where 
+where
     T: BorshSerialize + BorshDeserialize,
 {
     fn id(&self) -> ID {
@@ -219,8 +222,7 @@ where
 
     // Serialize
     fn serialize(&self) -> Vec<u8> {
-        borsh::to_vec(&self)
-            .expect("Illegal: Error Serializing Object")
+        borsh::to_vec(&self).expect("Illegal: Error Serializing Object")
     }
 }
 
@@ -273,7 +275,6 @@ impl PartialEq for WorkSize {
         self.0 == other.0
     }
 }
-
 
 #[cfg(test)]
 mod tests {

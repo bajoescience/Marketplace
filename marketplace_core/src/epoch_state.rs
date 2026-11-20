@@ -14,8 +14,8 @@
 
 // impl ProposalState {
 //     pub fn new() -> Self {
-//         Self { 
-//             block: None, 
+//         Self {
+//             block: None,
 //             count: 0,
 //         }
 //     }
@@ -25,9 +25,9 @@
 //         match self.block {
 //             // If block in state is empty, put block there
 //             None => Some(proposal.)
-//         } 
+//         }
 //         // Check if block gdc is more than cu
-//     } 
+//     }
 // }
 
 // impl EpochState for ProposalState {}

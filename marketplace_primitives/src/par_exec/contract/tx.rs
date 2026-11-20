@@ -2,10 +2,13 @@ use std::collections::{HashMap, hash_map::Entry};
 
 use borsh::{BorshDeserialize, BorshSerialize};
 
-use marketplace_helpers::{objects::{AgentResult, ID, IdHash}};
+use marketplace_helpers::objects::{AgentResult, ID, IdHash};
 use marketplace_wallet::{Key, Lock};
 
-use crate::{Verify, par_exec::{Bill, Tx}};
+use crate::{
+    Verify,
+    par_exec::{Bill, Tx},
+};
 
 #[derive(BorshSerialize, BorshDeserialize, Debug, Clone)]
 pub struct TxContract {
@@ -14,7 +17,7 @@ pub struct TxContract {
     // Authenticate TxContract
     // Stores <Lock.id(), Key>
     // After signing bill
-    auth: HashMap<ID, Key>
+    auth: HashMap<ID, Key>,
 }
 
 impl TxContract {
@@ -27,10 +30,7 @@ impl TxContract {
 
     // Create new instance with auth
     pub fn new_with_auth(bill: Bill, auth: HashMap<ID, Key>) -> Self {
-        Self {
-            bill,
-            auth,
-        }
+        Self { bill, auth }
     }
 
     // Initialize genesis JobContract for goldcoin
@@ -46,10 +46,8 @@ impl TxContract {
         match self.auth.entry(lock.id()) {
             Entry::Vacant(entry) => {
                 entry.insert(key);
-            },
-            Entry::Occupied(_) => {
-                
-            },  
+            }
+            Entry::Occupied(_) => {}
         }
     }
 }
@@ -73,7 +71,7 @@ impl TxContract {
 impl TxContract {
     pub fn get_txs(&self) -> &Vec<Tx> {
         self.bill.get_txs()
-    } 
+    }
 }
 
 impl Verify for TxContract {
@@ -89,28 +87,30 @@ impl Verify for TxContract {
 
 #[cfg(test)]
 pub mod tests {
-    use std::{vec};
+    use std::vec;
 
-use marketplace_helpers::{ objects::{IdHash, WU}};
-use marketplace_wallet::{Owner};
+    use marketplace_helpers::objects::{IdHash, WU};
+    use marketplace_wallet::Owner;
 
-use crate::par_exec::{ TxIdentifier, tx::{TxOpt, TxOptRef}};
+    use crate::par_exec::{
+        TxIdentifier,
+        tx::{TxOpt, TxOptRef},
+    };
 
-use super::*;
+    use super::*;
 
     // New txcontract
     #[test]
     fn verify_new_tx_contract() -> AgentResult<()> {
         let owner = Owner::new_sig();
 
-        let ipts = vec![
-            TxOptRef::new([255; 32], 0)
-        ];
+        let ipts = vec![TxOptRef::new([255; 32], 0)];
 
-        let opts = Some(vec![
-            TxOpt::new(owner.as_lock(), WU::try_from(20000).unwrap())
-        ]);
-        
+        let opts = Some(vec![TxOpt::new(
+            owner.as_lock(),
+            WU::try_from(20000).unwrap(),
+        )]);
+
         let tx = Tx::new(0, TxIdentifier::COIN, Some(ipts), opts);
 
         let bill = Bill::new(vec![tx]);

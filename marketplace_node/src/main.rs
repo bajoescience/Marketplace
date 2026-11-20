@@ -1,16 +1,22 @@
 use std::vec;
 
 use marketplace_core::Core;
-use marketplace_helpers::{functions, objects::{AgentResult, IdHash, WU, WorkSize}};
+use marketplace_helpers::{
+    functions,
+    objects::{AgentResult, IdHash, WU, WorkSize},
+};
 use marketplace_ledger::{Blockchain, DefaultBalances, State};
 use marketplace_p2p::Message;
-use marketplace_primitives::{par_exec::{ExecuteTime, TxOptRef, WorkPtr}, sync_final::BlockHeader};
+use marketplace_primitives::{
+    par_exec::{ExecuteTime, TxOptRef, WorkPtr},
+    sync_final::BlockHeader,
+};
 use marketplace_wallet::Owner;
 
 #[tokio::main]
 async fn main() -> AgentResult<()> {
     // Utxo state
-    let state= State::<DefaultBalances>::new();
+    let state = State::<DefaultBalances>::new();
 
     // Blockchain
     let chain = Blockchain::init("ledger", state).unwrap();
@@ -34,15 +40,16 @@ fn new_job(owner: &Owner) -> Message<WorkPtr> {
     let blk_hdr = BlockHeader::genesis();
 
     let workptr = WorkPtr::new(
-        work_addr, 
-        work_size, 
-        ipts, remainder, blk_hdr, 
-        ExecuteTime::NOW
+        work_addr,
+        work_size,
+        ipts,
+        remainder,
+        blk_hdr,
+        ExecuteTime::NOW,
     );
 
     // Sign workptr using owner
     let key = owner.sign(&workptr.id());
-
 
     let mut work_msg = Message::new(workptr);
     work_msg.add_auth(owner.as_lock(), key);

@@ -1,11 +1,11 @@
-use std::{todo};
+use std::todo;
 
 use sha3::{Digest, Sha3_256};
 use time::OffsetDateTime;
 
 use crate::objects::{CONTRACT_WHITEROOM_SIZE, ID, MIN_WORK_SIZE, VDF_CONSTANT, VRF_T, WU};
 use alloy_primitives::{U256, U512};
-use rug::{Rational};
+use rug::Rational;
 
 /// BFT whiteroom size given f amounts of tolerable faulty nodes
 pub const fn bft_from(f: usize) -> usize {
@@ -28,7 +28,7 @@ pub const fn bft_expected_from_thresh(thresh: usize) -> usize {
     bft_from(f)
 }
 
-/// Maximum whiteroom size given by 
+/// Maximum whiteroom size given by
 /// formula in the marketplace whitepaper.
 /// from an expected number of nodes
 pub const fn max_wr_size_from_expected(exp: usize) -> usize {
@@ -37,7 +37,7 @@ pub const fn max_wr_size_from_expected(exp: usize) -> usize {
     (2 * threshold) - 1
 }
 
-/// Expected whiteroom size from  a maximum 
+/// Expected whiteroom size from  a maximum
 /// whiteroom size max
 pub const fn expected_wr_from_max(max: usize) -> usize {
     let thresh = (max + 1) / 2;
@@ -53,7 +53,7 @@ pub const fn bft_thresh_from_max_wr_size(max: usize) -> usize {
     (2 * s) - 1
 }
 
-// Get vdf size by multiplying 
+// Get vdf size by multiplying
 // the result of work_size divided by 10000 and
 // the result of vrf threshold divided by 2 to 256 power.
 pub fn vdf_difficulty(work_size: WU, vrf_threshold: VRF_T) -> u64 {
@@ -67,7 +67,7 @@ pub fn vdf_difficulty(work_size: WU, vrf_threshold: VRF_T) -> u64 {
     // Invested Power (see whitepaper Page 5)
     let ip = work_size / CONTRACT_WHITEROOM_SIZE as u128;
 
-    // Multiply VRF threshold by Invested power, then divide by 
+    // Multiply VRF threshold by Invested power, then divide by
     // max 256 bit number and get final VDF difficulty in u64
     let result = U512::from(vrf_t) * U512::from(ip);
 
@@ -79,7 +79,6 @@ pub fn vdf_difficulty(work_size: WU, vrf_threshold: VRF_T) -> u64 {
 
     // The absolute minimum difficulty is 1
     std::cmp::max(diff, 1)
-
 }
 
 // Calculate average of two WU
@@ -95,12 +94,12 @@ pub fn avg_wu(a: WU, b: WU) -> WU {
 }
 
 /// Get new VRF threshold using whiteroom average and
-/// previous VRF threshold as described in the marketplace 
+/// previous VRF threshold as described in the marketplace
 /// whitepaper (Page 4).
-/// 
-/// wr_avg: Average Whiteroom size in a block 
+///
+/// wr_avg: Average Whiteroom size in a block
 /// referenced by the block header
-/// 
+///
 /// prev_vrf: Previous VRF threshold indicating Whiteroom
 /// Selction Probability.
 pub fn get_vrf(wr_avg_size: usize, prev_vrf: VRF_T) -> VRF_T {
@@ -130,9 +129,7 @@ pub fn from_bytes(id: &ID) -> String {
 
 // Founder's pub key hash
 pub fn founders() -> ID {
-    to_bytes(
-        "9eec6b485942aeb14e7a7955e1b31e061c26f46cbf5398263e0c3d43235017d5"
-    ).unwrap()
+    to_bytes("9eec6b485942aeb14e7a7955e1b31e061c26f46cbf5398263e0c3d43235017d5").unwrap()
 }
 
 // Get job fee amount from goldcoin amount
@@ -187,7 +184,7 @@ pub fn timestamp() -> u64 {
     OffsetDateTime::now_utc().unix_timestamp() as u64
 }
 
-/// Probability of voters chosen 
+/// Probability of voters chosen
 /// is given by  p = expected_users / total_currency
 pub fn voter_probability(users: u128, total_currency: WU) -> f64 {
     let rational = Rational::from(users / total_currency.inner());
@@ -195,8 +192,8 @@ pub fn voter_probability(users: u128, total_currency: WU) -> f64 {
     rational.to_f64()
 }
 
-/// Hash constant given by 
-/// 
+/// Hash constant given by
+///
 /// c = hash / 2 ^ 256
 /// where 256 bits is the hash length.
 pub fn hashconstant(hash: ID) -> f64 {
@@ -206,7 +203,6 @@ pub fn hashconstant(hash: ID) -> f64 {
 
     value as f64 / ((1u64 << 53) - 1) as f64
 }
-
 
 #[cfg(test)]
 mod tests {
@@ -259,9 +255,12 @@ mod tests {
     fn convert_to_bytes() -> Result<(), Box<dyn Error>> {
         let hex_str = "90a9a6923dd9ec246d8046c2bde4d323396f59b2d7a4d43e162db9aeda017b93";
         let result_bytes = to_bytes(hex_str)?;
-        let expected_result = [144, 169, 166, 146, 61, 217, 236, 36, 109, 128, 70, 194, 189, 228, 211, 35, 57, 111, 89, 178, 215, 164, 212, 62, 22, 45, 185, 174, 218, 1, 123, 147];
+        let expected_result = [
+            144, 169, 166, 146, 61, 217, 236, 36, 109, 128, 70, 194, 189, 228, 211, 35, 57, 111,
+            89, 178, 215, 164, 212, 62, 22, 45, 185, 174, 218, 1, 123, 147,
+        ];
         assert_eq!(result_bytes, expected_result);
-        
+
         Ok(())
     }
 
@@ -283,8 +282,14 @@ mod tests {
         assert_eq!(threshold, 3);
         assert_eq!(bft_expected_from_thresh(threshold), expected);
         assert_eq!(bft_from(1), expected);
-        assert_eq!(expected_wr_from_max(max_wr_size_from_expected(expected)), expected);
-        assert_eq!(bft_thresh_from_max_wr_size(max_wr_size_from_expected(expected)), 7);
+        assert_eq!(
+            expected_wr_from_max(max_wr_size_from_expected(expected)),
+            expected
+        );
+        assert_eq!(
+            bft_thresh_from_max_wr_size(max_wr_size_from_expected(expected)),
+            7
+        );
     }
 
     // Averaging work units should return their arithmetic mean and stay at least one unit.

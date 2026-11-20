@@ -1,18 +1,29 @@
-use std::{error::Error, format, fs::File, io::{Read, Write}};
+use std::{
+    error::Error,
+    format,
+    fs::File,
+    io::{Read, Write},
+};
 
 use marketplace_helpers::objects::AgentResult;
 use rand::rngs::OsRng;
 
 use schnorrkel::{KEYPAIR_LENGTH, Keypair, SecretKey};
 
-use crate::{helpers::{functions, objects::{Hash, ID}}, owner::Key};
+use crate::{
+    helpers::{
+        functions,
+        objects::{Hash, ID},
+    },
+    owner::Key,
+};
 
 /// # Wallet
-/// 
+///
 /// `Wallet` is a single cryptographic key pair
 #[derive(Clone)]
 pub struct Wallet {
-    key: Keypair
+    key: Keypair,
 }
 
 impl Wallet {
@@ -21,14 +32,12 @@ impl Wallet {
     pub fn new() -> Self {
         let keypair = Keypair::generate_with(OsRng);
 
-        Self {
-            key: keypair
-        }
+        Self { key: keypair }
     }
 
     /// Create a new wallet and add it to a file
     /// named `keypair.bin`
-    /// 
+    ///
     /// **NOTE: Never Expose Your keypair File That Contains Your Private Key.**
     pub fn new_keypair_file() -> Result<(), Box<dyn Error>> {
         let wallet = Wallet::new();
@@ -57,14 +66,10 @@ impl Wallet {
     /// Create a new wallet with an existing private key
     pub fn build_from(keypair_byte: &[u8; KEYPAIR_LENGTH]) -> AgentResult<Self> {
         let Ok(signing_key) = Keypair::from_bytes(keypair_byte) else {
-            return Err(format!(
-                "Error: Couldn't convert keypair bytes to Wallet"
-            ))
+            return Err(format!("Error: Couldn't convert keypair bytes to Wallet"));
         };
 
-        Ok(Self { 
-            key: signing_key
-        })
+        Ok(Self { key: signing_key })
     }
 
     /// Get Key pair
@@ -115,15 +120,13 @@ impl Hash for Wallet {
     }
 }
 
-
-
 #[cfg(test)]
 mod tests {
     use std::{assert_eq, error::Error, panic};
 
-use schnorrkel::{PublicKey, Signature};
+    use schnorrkel::{PublicKey, Signature};
 
-use super::*;
+    use super::*;
 
     // Initialize new message
     fn message() -> ID {

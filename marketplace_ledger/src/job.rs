@@ -1,10 +1,16 @@
+use dashmap::{
+    DashMap,
+    mapref::one::{Ref, RefMut},
+};
 use std::{collections::HashSet, format, sync::Mutex};
-use dashmap::{DashMap, mapref::one::{Ref, RefMut}};
 
-use marketplace_helpers::{functions, objects::{AgentResult, ID}};
+use marketplace_helpers::{
+    functions,
+    objects::{AgentResult, ID},
+};
 use marketplace_primitives::par_exec::{Contract, JobContract, TxOpt, TxOptRef};
 /// # Jobs
-/// 
+///
 /// The `Jobs` is the Live State of the marketplace where live jobs are stored and updated.
 pub struct Jobs {
     // This is where jobs are kept
@@ -37,9 +43,10 @@ impl Jobs {
         for ctr_id in self.ready_jobs.lock().unwrap().drain() {
             // Collect job contracts and drop utxos given that
             // the job has been finalized
-            let (_, (jobctr, _)) = self.jobs.remove(&ctr_id)
+            let (_, (jobctr, _)) = self
+                .jobs
+                .remove(&ctr_id)
                 .expect("Illegal: Jobcontract not found in jobs yet it exists as finalized");
-
 
             ctrs.push(Contract::JOB(jobctr))
         }
@@ -58,29 +65,31 @@ impl Jobs {
     }
 
     /// Get jobctr ref from jobs
-    pub fn get_job(&self, id: &ID) -> AgentResult<
-        Ref<'_, ID, (JobContract, Vec<(TxOptRef, TxOpt)>)>
-    > {
+    pub fn get_job(
+        &self,
+        id: &ID,
+    ) -> AgentResult<Ref<'_, ID, (JobContract, Vec<(TxOptRef, TxOpt)>)>> {
         // Check if contract exists
         let Some(refs) = self.jobs.get(id) else {
             return Err(format!(
                 "Error: Job with work id {} does not exist",
                 functions::from_bytes(id)
-            ))
+            ));
         };
 
         Ok(refs)
     }
 
-    pub fn get_mut_job(&self, id: &ID) -> AgentResult<
-        RefMut<'_, ID, (JobContract, Vec<(TxOptRef, TxOpt)>)>
-    > {
+    pub fn get_mut_job(
+        &self,
+        id: &ID,
+    ) -> AgentResult<RefMut<'_, ID, (JobContract, Vec<(TxOptRef, TxOpt)>)>> {
         // Check if contract exists
         let Some(refs) = self.jobs.get_mut(id) else {
             return Err(format!(
                 "Error: Job with work id {} does not exist",
                 functions::from_bytes(id)
-            ))
+            ));
         };
 
         Ok(refs)
@@ -90,12 +99,12 @@ impl Jobs {
 // Setter methods
 impl Jobs {
     /// Add a new `Contract` to `Jobs`
-    /// 
+    ///
     /// **Note:**
-    /// 
+    ///
     /// Every `Transaction Contract` is automatically
     /// ready to be finalized.
-    /// 
+    ///
     /// The same is not true for a `Job Contract`.
     pub fn add_contract(&self, jobctr: JobContract, utxos: Vec<(TxOptRef, TxOpt)>) {
         let id = jobctr.id();
@@ -111,12 +120,12 @@ impl Jobs {
 #[cfg(test)]
 mod tests {
     use std::{
-        sync::{Arc, mpsc, Barrier},
+        sync::{Arc, Barrier, mpsc},
         thread,
         time::Duration,
     };
 
-    use marketplace_helpers::objects::{WU, WorkSize, AgentResult};
+    use marketplace_helpers::objects::{AgentResult, WU, WorkSize};
     use marketplace_primitives::{
         par_exec::{Contract, ExecuteTime, JobContract, TxOpt, TxOptRef, WorkPtr},
         sync_final::BlockHeader,

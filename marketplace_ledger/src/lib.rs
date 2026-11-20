@@ -1,12 +1,12 @@
-pub mod state;
-mod job;
 mod blockchain;
+mod job;
 mod mempool;
+pub mod state;
 
-pub use state::{Balances, State, DefaultBalances};
-pub use job::Jobs;
 pub use blockchain::Blockchain;
+pub use job::Jobs;
 pub use mempool::Mempool;
+pub use state::{Balances, DefaultBalances, State};
 
 #[cfg(test)]
 mod tests {

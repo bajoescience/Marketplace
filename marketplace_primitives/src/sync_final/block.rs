@@ -1,18 +1,18 @@
-mod header;
 mod body;
+mod header;
 
-use std::{format};
+pub use body::BlockBody;
 use borsh::{BorshDeserialize, BorshSerialize};
 pub use header::BlockHeader;
-pub use body::BlockBody;
-use marketplace_helpers::{ objects::{AgentResult, ID, IdHash}};
+use marketplace_helpers::objects::{AgentResult, ID, IdHash};
+use std::format;
 
-use crate::par_exec::{Contract};
+use crate::par_exec::Contract;
 
 /// # Block
-/// 
+///
 /// `Block` is a list of contracts finalized by the network during an epoch.
-/// 
+///
 /// When `Contracts` are finalized in blocks, they are considered dead state, and immutable.
 #[derive(Debug, Clone, BorshSerialize, BorshDeserialize)]
 pub struct Block {
@@ -22,23 +22,26 @@ pub struct Block {
 
 impl Block {
     /// Create a new Block from a Vec of contracts
-    /// 
-    /// An empty Vector can also be supplied, but it will 
+    ///
+    /// An empty Vector can also be supplied, but it will
     /// have a VRF_threshold that
     /// will ultimately be half the original
     pub fn new(prev_blk_hdr: &BlockHeader, body: BlockBody) -> Self {
         // Get block header
         let header = BlockHeader::new(prev_blk_hdr, &body);
 
-        Self {
-            header,
-            body,
-        }
+        Self { header, body }
+    }
+
+    /// Create a new empty block
+    pub fn empty(prev_header: &BlockHeader) -> Self {
+        let body = BlockBody::empty();
+        Self::new(prev_header, body)
     }
 
     // Genesis block
     pub fn genesis() -> Self {
-        Block { 
+        Block {
             header: BlockHeader::genesis(),
             body: BlockBody::genesis(),
         }
@@ -94,8 +97,7 @@ impl Block {
 }
 
 // Setter methods
-impl Block {
-}
+impl Block {}
 
 // Validation
 impl Block {
@@ -107,9 +109,7 @@ impl Block {
 
         // Compare headers
         if self.id() != blk_hdr.id() {
-            return Err(format!(
-                "Error: Block header does not match expected"
-            ))
+            return Err(format!("Error: Block header does not match expected"));
         }
 
         Ok(())
@@ -120,9 +120,9 @@ impl Block {
 mod tests {
     use std::assert_eq;
 
-use marketplace_helpers::objects::{WU, IdHash};
+    use marketplace_helpers::objects::{IdHash, WU};
 
-use super::*;
+    use super::*;
 
     // Test gdc of block
     #[test]

@@ -1,17 +1,17 @@
 //! # Work Pointer
-//! 
+//!
 //! A module that implements the Work Pointer
 //! referencing a compute task on a decentralized
-//! storage network as described in the 
+//! storage network as described in the
 //! Marketplace Whitepaper
 
+use crate::Verify;
+use crate::helpers::objects::{ID, WorkAddr};
+use crate::par_exec::TxOptRef;
+use crate::sync_final::BlockHeader;
 use borsh::{BorshDeserialize, BorshSerialize};
 use marketplace_helpers::objects::WorkSize;
 use marketplace_wallet::Lock;
-use crate::Verify;
-use crate::par_exec::TxOptRef;
-use crate::helpers::objects::{ID, WorkAddr};
-use crate::sync_final::BlockHeader;
 
 /// When to start executing work
 #[derive(BorshSerialize, BorshDeserialize, Debug, Clone)]
@@ -27,18 +27,18 @@ pub enum ExecuteTime {
 }
 
 /// # Work Pointer `WorkPtr`
-/// 
+///
 /// `WorkPtr` is a pointer like type that references a specific work to be executed
 /// by it's address in a decentralized storage system which is accessible by other nodes.
-/// 
-/// It is sent to the network by an employer to initiate a `Job` 
-/// 
+///
+/// It is sent to the network by an employer to initiate a `Job`
+///
 /// The `WorkPtr` can be locked to prove ownership.
-/// 
+///
 /// ## Example
-/// 
+///
 /// **NOTE: The values used in this example are dummy values**
-/// 
+///
 /// ```
 /// use marketplace_primitives::{
 ///     par_exec::{ExecuteTime, TxOptRef, WorkPtr},
@@ -47,22 +47,22 @@ pub enum ExecuteTime {
 /// };
 /// use marketplace_helpers::objects::{WU, IdHash, WorkSize};
 /// use marketplace_wallet::Owner;
-/// 
+///
 /// // Address of Work in Decentralized staorage
 /// let work_address = [20u8; 32];
-/// 
+///
 /// // Work size of one gdc
 /// let work_size = WU::GDC();
-/// 
+///
 /// // Time to execute work
 /// let do_at = ExecuteTime::NOW;
-/// 
+///
 /// // Employer
 /// let employer = Owner::new_sig();
-/// 
+///
 /// // ID of latest block header
 /// let blk_hdr = BlockHeader::genesis();
-/// 
+///
 /// // Create work pointer instance
 /// let mut workptr = WorkPtr::new(
 ///     work_address,
@@ -98,11 +98,11 @@ pub struct WorkPtr {
 
 impl WorkPtr {
     /// Create a new `WorkPtr` instance
-    /// 
+    ///
     /// # Example
-    /// 
+    ///
     /// **NOTE: The values used in this example are dummy values**
-    /// 
+    ///
     /// ```
     ///     use marketplace_primitives::{
     ///         par_exec::{ExecuteTime, TxOptRef, WorkPtr},
@@ -111,25 +111,25 @@ impl WorkPtr {
     ///     };
     /// use marketplace_helpers::objects::{WU, IdHash, WorkSize};
     /// use marketplace_wallet::Owner;
-    /// 
+    ///
     /// // Address of Work in Decentralized staorage
     /// let work_address = [20u8; 32];
-    /// 
+    ///
     /// // Work size of one gdc
     /// let work_size = WU::GDC();
     ///  
     /// // Time to execute work
     /// let do_at = ExecuteTime::NOW;
-    /// 
+    ///
     /// // Employer
     /// let employer = Owner::new_sig();
-    /// 
+    ///
     /// // Ipt transaction output
     /// let ipts = vec![TxOptRef::new([255u8; 32], 0)];
-    /// 
+    ///
     /// // ID of latest block header
     /// let blk_hdr = BlockHeader::genesis();
-    /// 
+    ///
     /// // Create work pointer instance
     /// let mut workptr = WorkPtr::new(
     ///     work_address,
@@ -141,21 +141,20 @@ impl WorkPtr {
     /// );
     /// ```
     pub fn new(
-        work_addr: ID, 
-        size: WorkSize, 
+        work_addr: ID,
+        size: WorkSize,
         ipts: Vec<TxOptRef>,
         remainder: Lock,
         blk_hdr: BlockHeader,
-        do_at: ExecuteTime
+        do_at: ExecuteTime,
     ) -> Self {
-
         Self {
             work_addr,
             size,
             ipts,
             blk_hdr,
             do_at,
-            remainder
+            remainder,
         }
     }
 }
@@ -191,8 +190,7 @@ impl WorkPtr {
 }
 
 // Setter methods
-impl WorkPtr {
-}
+impl WorkPtr {}
 
 // Verify sturcture of work input
 impl Verify for WorkPtr {
@@ -207,12 +205,12 @@ impl Verify for WorkPtr {
 #[cfg(test)]
 mod tests {
 
-use std::vec;
+    use std::vec;
 
-use marketplace_helpers::{objects::WU};
-use marketplace_wallet::Owner;
+    use marketplace_helpers::objects::WU;
+    use marketplace_wallet::Owner;
 
-use super::*;
+    use super::*;
     // Work pointer getters should return the values supplied at construction.
     #[test]
     fn work_pointer_getters() {
@@ -224,9 +222,7 @@ use super::*;
         let work_ptr = WorkPtr::new(
             work_addr,
             size,
-            vec![
-                TxOptRef::new([255; 32], 0)
-                ],
+            vec![TxOptRef::new([255; 32], 0)],
             owner.as_lock(),
             blk_hdr,
             ExecuteTime::AFTER(10),
@@ -234,14 +230,8 @@ use super::*;
 
         assert_eq!(work_ptr.work_addr(), &work_addr);
         assert_eq!(work_ptr.work_size().into(), size.into());
-        assert_eq!(
-            work_ptr.ipts(), 
-            &vec![
-                TxOptRef::new([255; 32], 0)
-            ]
-        );
+        assert_eq!(work_ptr.ipts(), &vec![TxOptRef::new([255; 32], 0)]);
         assert_eq!(work_ptr.blk_hdr(), &BlockHeader::genesis());
         assert!(matches!(work_ptr.do_at(), ExecuteTime::AFTER(10)));
     }
-
 }
