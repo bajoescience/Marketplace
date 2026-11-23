@@ -1,6 +1,12 @@
 use borsh::{BorshDeserialize, BorshSerialize};
-use marketplace_helpers::{functions, objects::{AgentResult, ID, WU}};
-use schnorrkel::{PublicKey, vrf::{VRF_PREOUT_LENGTH, VRF_PROOF_LENGTH, VRFPreOut, VRFProof}};
+use marketplace_helpers::{
+    functions,
+    objects::{AgentResult, ID, WU},
+};
+use schnorrkel::{
+    PublicKey,
+    vrf::{VRF_PREOUT_LENGTH, VRF_PROOF_LENGTH, VRFPreOut, VRFProof},
+};
 use statrs::distribution::{Binomial, DiscreteCDF};
 
 pub const EXPECTED_VOTERS: usize = 25;
@@ -15,18 +21,18 @@ pub const fn voting_threshold() -> usize {
 use crate::Owner;
 
 /// # Role
-/// 
+///
 /// This is the role status of the entity voting on a block.
-/// 
+///
 /// The roles consists of:
-/// 
+///
 /// - Proposer
-/// 
+///
 /// - Validator
 #[derive(Debug, Clone, Copy, BorshSerialize, BorshDeserialize)]
 pub enum Role {
     Proposer,
-    Validator
+    Validator,
 }
 
 // VRF module for block voting
@@ -43,10 +49,9 @@ impl VotingProof {
     }
 }
 
-
-/// Voting Proof constructor using VRF for block voting 
+/// Voting Proof constructor using VRF for block voting
 /// depending on the voting role
-/// 
+///
 /// The seed is the hash of the previous block
 ///
 /// This function returns the VRF output and proof
@@ -54,22 +59,19 @@ pub fn vrf(owner: &Owner, role: Role, seed: &[u8]) -> VotingProof {
     // Input hash of seed and role into vrf construction
     let role_string = match role {
         Role::Proposer => String::from("proposer"),
-        Role::Validator => String::from("validator")
+        Role::Validator => String::from("validator"),
     };
 
     let ctx = schnorrkel::signing_context(role_string.as_bytes());
 
-    let trsc = ctx.bytes(
-        &functions::seed(seed, role_string.as_bytes())
-    );
+    let trsc = ctx.bytes(&functions::seed(seed, role_string.as_bytes()));
 
     // Generate proof
-    let (io, proof, _) = owner.keypair()
-        .vrf_sign(trsc);
+    let (io, proof, _) = owner.keypair().vrf_sign(trsc);
 
-    VotingProof { 
-        vrf_pre_opt: io.to_preout().to_bytes(), 
-        vrf_proof: proof.to_bytes(), 
+    VotingProof {
+        vrf_pre_opt: io.to_preout().to_bytes(),
+        vrf_proof: proof.to_bytes(),
         pk_bytes: owner.pk(),
     }
 }
@@ -77,43 +79,35 @@ pub fn vrf(owner: &Owner, role: Role, seed: &[u8]) -> VotingProof {
 /// Get output of VRF after proving
 pub fn prove_vrf(voting_proof: &VotingProof, seed: &[u8], role: Role) -> AgentResult<ID> {
     let Ok(public) = PublicKey::from_bytes(&voting_proof.pk_bytes) else {
-        return Err(format!(
-            "Error: Public key is not valid"
-        ));
+        return Err(format!("Error: Public key is not valid"));
     };
 
     // Get Input of VRF
     let role_string = match role {
         Role::Proposer => String::from("proposer"),
-        Role::Validator => String::from("validator")
+        Role::Validator => String::from("validator"),
     };
 
     let ctx = schnorrkel::signing_context(role_string.as_bytes());
 
-    let trsc = ctx.bytes(
-        &functions::seed(seed, role_string.as_bytes())
-    );
+    let trsc = ctx.bytes(&functions::seed(seed, role_string.as_bytes()));
 
     // Verify vrf opt
     match public.vrf_verify(
-        trsc, 
-        &VRFPreOut::from_bytes(&voting_proof.vrf_pre_opt).unwrap(), 
-        &VRFProof::from_bytes(&voting_proof.vrf_proof).unwrap()
+        trsc,
+        &VRFPreOut::from_bytes(&voting_proof.vrf_pre_opt).unwrap(),
+        &VRFProof::from_bytes(&voting_proof.vrf_proof).unwrap(),
     ) {
-        Ok((vrf_io, _)) => Ok(
-            functions::hash(vrf_io.as_output_bytes())
-        ),
-        Err(_) => Err(format!(
-            "Error: Could not verify VRF output"
-        ))
+        Ok((vrf_io, _)) => Ok(functions::hash(vrf_io.as_output_bytes())),
+        Err(_) => Err(format!("Error: Could not verify VRF output")),
     }
 }
 
 /// Get subusers according to algorand subusers algorithm
-/// 
+///
 /// see https://github.com/onplanetnowhere/AlgorandConsensusProtocolMD#cryptographic-sortition
-/// 
-/// 
+///
+///
 /// `c`      = random value in [0, 1) given by VRFhash / 2 ^ hashlength
 /// `weight` = user's currency balance / number of subUsers
 /// `p`      = probability that each subUser is selected
@@ -131,8 +125,8 @@ pub fn subusers_count(vrf_opt: ID, user_amount: WU, total_currency: WU) -> Agent
     let weight = u64::try_from(user_amount.inner()).unwrap_or(u64::MAX);
 
     // X ~ Binomial(weight, p)
-    let distribution = Binomial::new(p, weight)
-        .map_err(|e| format!("invalid binomial parameters: {e}"))?;
+    let distribution =
+        Binomial::new(p, weight).map_err(|e| format!("invalid binomial parameters: {e}"))?;
 
     // Find the binomial interval containing c.
     Ok(distribution.inverse_cdf(c))

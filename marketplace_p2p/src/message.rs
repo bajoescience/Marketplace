@@ -1,11 +1,14 @@
-use std::{collections::HashMap, format};
+use std::{
+    collections::{HashMap, hash_map::Entry},
+    format,
+};
 
 use marketplace_helpers::objects::{AgentResult, ID, IdHash};
 use marketplace_wallet::{Key, Lock};
 
 // Message has different variants for all types
 // This includes the following
-// Job: To create a new job on network, 
+// Job: To create a new job on network,
 // Result: To add job results to an existing job in network,
 // Block: To add a new Block to a job in the network,
 // Confirm: To confirm the chosen block.
@@ -20,11 +23,25 @@ impl<T: IdHash> Message<T> {
         let Message { payload, auth } = self;
 
         let Some(key) = auth.get(&lock.id()) else {
-            return Err(format!(
-                "Error: Key does not exist"
-            ));
+            return Err(format!("Error: Key does not exist"));
         };
 
         lock.unlock(key, &payload.id())
+    }
+
+    pub fn new(payload: T) -> Self {
+        Self {
+            payload,
+            auth: HashMap::new(),
+        }
+    }
+
+    pub fn add_auth(&mut self, lock: Lock, key: Key) {
+        match self.auth.entry(lock.id()) {
+            Entry::Vacant(entry) => {
+                entry.insert(key);
+            }
+            Entry::Occupied(_) => {}
+        }
     }
 }

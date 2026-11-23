@@ -4,13 +4,18 @@ pub mod validator;
 use marketplace_helpers::objects::{AgentResult, ID};
 use marketplace_wallet::Lock;
 
-pub use self::proposer::{Proposer, Proposal};
-pub use self::validator::{Validator, Validated};
+use crate::sync_final::BlockHeader;
+
+pub use self::proposer::{Proposal, Proposer};
+pub use self::validator::{Validated, Validator};
 
 pub trait Voter {
     fn owner(&self) -> Lock;
 
     fn get_vrf_opt(&self) -> AgentResult<ID>;
+
+    // Get block header referenced
+    fn header(&self) -> BlockHeader;
 }
 
 #[cfg(test)]

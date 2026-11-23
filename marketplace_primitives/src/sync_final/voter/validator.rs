@@ -1,10 +1,20 @@
 use std::collections::HashMap;
 
 use borsh::{BorshDeserialize, BorshSerialize};
-use marketplace_helpers::{functions, objects::{AgentResult, ID, IdHash}};
-use marketplace_wallet::{Key, Lock, Owner, voting::{self, Role, VotingProof}};
+use marketplace_helpers::{
+    functions,
+    objects::{AgentResult, ID, IdHash},
+};
+use marketplace_wallet::{
+    Key, Lock, Owner,
+    voting::{self, Role, VotingProof},
+};
 
-use crate::{Verify, par_exec::WRVote, sync_final::{BlockHeader, Proposer, voter::Voter}};
+use crate::{
+    Verify,
+    par_exec::WRVote,
+    sync_final::{BlockHeader, Proposer, voter::Voter},
+};
 
 // This is a validator role
 const ROLE: Role = Role::Validator;
@@ -14,25 +24,24 @@ const ROLE: Role = Role::Validator;
 pub struct Validator {
     proof: VotingProof,
 
-    // Proposer ID
-    proposer: ID,
-
     // Validated blockheader
     header: BlockHeader,
 }
 
 impl Validator {
     /// Build a new validator using a block id
-    pub fn new(owner: &Owner, seed: &[u8], proposer: &Proposer) -> Self {
-        let votingproof = voting::vrf(owner, ROLE, seed);
-
-        let header = proposer.block().header();
+    pub fn new(owner: &Owner, header: BlockHeader) -> Self {
+        let votingproof = voting::vrf(owner, ROLE, &header.id());
 
         Self {
             proof: votingproof,
-            header: header.clone(),
-            proposer: proposer.id(),
+            header: header,
         }
+    }
+
+    // Validator when there are no proposals
+    pub fn from_proposer(owner: &Owner, proposer: &Proposer) -> Self {
+        Self::new(owner, *proposer.block().header())
     }
 
     /// Verify a proposer identity and return it's VRF output
@@ -53,9 +62,7 @@ impl Validator {
 impl Voter for Validator {
     /// Get lock object representing proposer
     fn owner(&self) -> Lock {
-        Lock::SIG(
-            functions::hash(self.pk())
-        )
+        Lock::SIG(functions::hash(self.pk()))
     }
 
     fn get_vrf_opt(&self) -> AgentResult<ID> {
@@ -63,13 +70,16 @@ impl Voter for Validator {
 
         self.verify(&seed)
     }
+
+    fn header(&self) -> BlockHeader {
+        self.header
+    }
 }
 
-
-/// The `Validated` is the structure sent to the network to validate a 
+/// The `Validated` is the structure sent to the network to validate a
 /// proposed `BlockHeader`
-/// 
-/// The `Validated` struct is not stored, but is only used to validate that a block is 
+///
+/// The `Validated` struct is stored, but is only used to validate that a block is
 /// the appropiate next block in the chain.
 #[derive(BorshSerialize, BorshDeserialize, Debug, Clone)]
 pub struct Validated {
@@ -82,7 +92,7 @@ pub struct Validated {
     subusers: u64,
 
     // Authenticate Validated
-    auth: HashMap<ID, Key>
+    auth: HashMap<ID, Key>,
 }
 
 impl Validated {
@@ -91,7 +101,7 @@ impl Validated {
         Self {
             voter: validator,
             subusers,
-            auth
+            auth,
         }
     }
 }
@@ -113,7 +123,7 @@ impl Verify for Validated {
             return Err(format!(
                 "Err: Key for Lock {} does not exist",
                 functions::from_bytes(&owner.id())
-            ))
+            ));
         };
 
         owner.unlock(key, &self.validator().id())
@@ -140,7 +150,7 @@ impl WRVote for Validated {
 mod tests {
     use std::collections::HashMap;
 
-    use marketplace_helpers::{functions, objects::IdHash};
+    use marketplace_helpers::{objects::IdHash};
     use marketplace_wallet::Owner;
 
     use crate::{
@@ -149,30 +159,13 @@ mod tests {
         sync_final::{Block, Proposer, Validated, Validator, voter::Voter},
     };
 
-    // A validator should retain the voter's public key and verify its proposer-seeded proof.
-    #[test]
-    fn validator_proves_voter_identity() {
-        let owner = Owner::new_sig();
-        let proposer = Proposer::new(&owner, Block::genesis());
-        let seed = proposer.block().header().prev();
-        let validator = Validator::new(&owner, &seed, &proposer);
-
-        assert_eq!(validator.pk(), owner.pk());
-        assert!(validator.verify(&seed).is_ok());
-        assert!(validator.get_vrf_opt().is_ok());
-        assert_eq!(
-            validator.owner(),
-            marketplace_wallet::Lock::SIG(functions::hash(&owner.pk()))
-        );
-    }
-
     // A validated vote should expose the validator and its declared vote weight.
     #[test]
     fn validated_vote_exposes_validator_and_weight() {
         let owner = Owner::new_sig();
         let proposer = Proposer::new(&owner, Block::genesis());
-        let seed = proposer.block().header().prev();
-        let validator = Validator::new(&owner, &seed, &proposer);
+        let header = *proposer.block().header();
+        let validator = Validator::new(&owner, header);
         let vote_id = proposer.block().header().id();
         let validated = Validated::new(validator, 4, HashMap::new());
 
@@ -186,8 +179,8 @@ mod tests {
     fn validated_vote_verifies_with_validator_authentication() {
         let owner = Owner::new_sig();
         let proposer = Proposer::new(&owner, Block::genesis());
-        let seed = proposer.block().header().prev();
-        let validator = Validator::new(&owner, &seed, &proposer);
+        let header = *proposer.block().header();
+        let validator = Validator::new(&owner, header);
         let validator_id = validator.id();
         let validator_lock = validator.owner();
         let key = owner.sign(&validator_id);
@@ -203,8 +196,8 @@ mod tests {
     fn validated_vote_requires_validator_authentication() {
         let owner = Owner::new_sig();
         let proposer = Proposer::new(&owner, Block::genesis());
-        let seed = proposer.block().header().prev();
-        let validator = Validator::new(&owner, &seed, &proposer);
+        let header = *proposer.block().header();
+        let validator = Validator::new(&owner, header);
         let validated = Validated::new(validator, 1, HashMap::new());
 
         assert!(validated.verify().is_err());

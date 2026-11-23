@@ -1,61 +1,71 @@
 use std::{format, hash::Hash as StdHash};
 
+use crate::{
+    Wallet,
+    helpers::{functions, objects::ID},
+};
 use borsh::{BorshDeserialize, BorshSerialize};
 use marketplace_helpers::objects::{AgentResult, Hash, IdHash};
 use schnorrkel::{KEYPAIR_LENGTH, Keypair, PublicKey, SIGNATURE_LENGTH, Signature};
-use crate::{Wallet, helpers::{functions, objects::ID}};
 
 /// # Owner
-/// 
-/// `Owner` is an identity that can interact with assets on the marketplace by locking and unlocking 
+///
+/// `Owner` is an identity that can interact with assets on the marketplace by locking and unlocking
 /// marketplace primitives which include:
-/// 
+///
 /// - `Work Pointer`
-/// 
+///
 /// - `Result Pointer`
-/// 
+///
 /// - `Transactions`
-/// 
+///
 /// when locking these primitives, the `Lock` generates a `Key` that can be used to later prove ownership of the primitives.
-/// 
+///
 /// **There are multiple types of Owners which include:**
-/// 
+///
 /// ## SIG
-/// 
+///
 /// `SIG` is an `Owner` that locks a primitive by signing it
 /// with a single `Wallet`.
-/// 
+///
 /// ### Examples
-/// 
+///
 /// Initialize a new `SIG Owner`
 /// and sign a message
-/// 
+///
 /// ```
 /// use marketplace_wallet::Owner;
-/// 
+///
 /// let msg = [20u8; 32];
-/// 
+///
 /// let owner = Owner::new_sig();
-/// 
+///
 /// // Sign message
 /// let key = owner.sign(&msg);
-/// 
+///
 /// // Lock form of owner
 /// let lock = owner.as_lock();
-/// 
+///
 /// // Prove signature
 /// assert!(lock.unlock(&key, &msg).is_ok());
 /// ```
-/// 
+///
+#[derive(Clone)]
 pub enum Owner {
     // Single sig containing pubkey hash
     SIG(Wallet),
-
     // Keeps ID of account/token
     // ACCOUNT(Box<Owner>),
 }
 
 impl Owner {
+    // Owner id
+    // We change the owner to it's lock form
+    // before getting it's ID
+    fn id(&self) -> ID {
+        self.as_lock().id()
+    }
+
     /// Create a new `Owner` with a single keypair
     pub fn new_sig() -> Self {
         let wallet = Wallet::new();
@@ -67,9 +77,7 @@ impl Owner {
     /// Create a new wallet with an existing private key
     pub fn build_from(keypair: &[u8; KEYPAIR_LENGTH]) -> AgentResult<Self> {
         let Ok(wallet) = Wallet::build_from(keypair) else {
-            return Err(format!(
-                "Error: Invalid Keypair"
-            ))
+            return Err(format!("Error: Invalid Keypair"));
         };
 
         Ok(Self::SIG(wallet))
@@ -78,14 +86,14 @@ impl Owner {
     // Return an owner's keypair
     pub fn keypair(&self) -> &Keypair {
         match self {
-            Self::SIG(wallet) => wallet.keypair()
+            Self::SIG(wallet) => wallet.keypair(),
         }
     }
 
     /// Return owner's public key
     pub fn pk(&self) -> ID {
         match self {
-            Owner::SIG(wallet) => wallet.pubkey_bytes()
+            Owner::SIG(wallet) => wallet.pubkey_bytes(),
         }
     }
 
@@ -94,16 +102,16 @@ impl Owner {
     //     Self::ACCOUNT(Box::new(owner))
     // }
 
-    /// This returns the Lock version of Owner isntance 
+    /// This returns the Lock version of Owner isntance
     /// For example:
-    /// 
+    ///
     /// Owner::SIG(...bytes);
-    /// 
-    /// can simply be written in lock form as 
+    ///
+    /// can simply be written in lock form as
     /// Lock::SIG(hash(...bytes))
-    /// 
+    ///
     /// Which is a better form for transactions, but both are the same
-    
+
     // Return lock object synonymous with owner
     pub fn as_lock(&self) -> Lock {
         match self {
@@ -113,9 +121,9 @@ impl Owner {
 
     /// Return whiteroom lock that claims whiteroom pay
     pub fn as_wr_lock(&self) -> Lock {
-       match self {
-           Self::SIG(wallet) => Lock::WHITEROOM(wallet.hash()),
-       } 
+        match self {
+            Self::SIG(wallet) => Lock::WHITEROOM(wallet.hash()),
+        }
     }
 
     pub fn sign(&self, msg: &[u8]) -> Key {
@@ -131,22 +139,10 @@ impl PartialEq<Lock> for Owner {
     fn eq(&self, other: &Lock) -> bool {
         // To be equal, they must have the same variant
         match (self, other) {
-            (Self::SIG(wallet), Lock::SIG(pubkey_hash)) => {
-                wallet.hash() == *pubkey_hash
-            },
-            (Self::SIG(wallet), Lock::WHITEROOM(wr_owner)) => {
-                wallet.hash() == *wr_owner
-            },
-            _ => false
+            (Self::SIG(wallet), Lock::SIG(pubkey_hash)) => wallet.hash() == *pubkey_hash,
+            (Self::SIG(wallet), Lock::WHITEROOM(wr_owner)) => wallet.hash() == *wr_owner,
+            _ => false,
         }
-    }
-}
-
-// We change the owner to it's lock form
-// before getting it's ID
-impl IdHash for Owner {
-    fn id(&self) -> ID {
-        self.as_lock().id()
     }
 }
 
@@ -165,82 +161,81 @@ impl StdHash for Owner {
     }
 }
 
-
 /// # Lock
-/// 
+///
 /// `Lock` is a type that enables ownership of a marketplace primitive by locking it. Only a corresponding `Owner`
 /// can unlock it using a `Key`.
-/// 
+///
 /// **There are multiple types of Lock which include:**
-/// 
+///
 /// ## SIG
-/// 
+///
 /// `SIG` contains a single `Wallet` hash (public key hash) of the form
-/// 
+///
 /// ### Examples
-/// 
+///
 /// ```
 /// use marketplace_wallet::{Lock, Wallet};
 /// use marketplace_helpers::objects::Hash;
-/// 
+///
 /// let wallet = Wallet::new();
 /// let lock = Lock::SIG(wallet.hash());
 /// ```
-/// 
+///
 /// or using the standard `Owner` `SIG`
-/// 
+///
 /// ```
 /// use marketplace_wallet::{Lock, Owner};
-/// 
+///
 /// let owner = Owner::new_sig();
 /// let lock = owner.as_lock();
 /// ```
-/// 
+///
 /// **Using a Key, we can unlock a locked primitive**
-/// 
+///
 /// ```
 /// use marketplace_wallet::{Lock, Owner};
-/// 
+///
 /// // primitive hash
 /// let msg = [20u8; 32];
-/// 
+///
 /// let owner = Owner::new_sig();
 /// let lock = owner.as_lock();
-/// 
+///
 /// let key = owner.sign(&msg);
-/// 
+///
 /// // Unlock primitive
 /// assert!(lock.unlock(&key, &msg).is_ok());
 /// ```
-/// 
+///
 /// ## WHITEROOM
-/// 
+///
 /// `WHITEROOM` is a type of `Lock` for `Whiteroom` members in a `Job`. It indicates to the network
 /// that the owner is a whiteroom member.
-/// 
+///
 /// ### Examples
-/// 
+///
 /// ```
 /// use marketplace_wallet::{Lock, Owner};
 /// // primitive hash
 /// let msg = [20u8; 32];
-/// 
+///
 /// let owner = Owner::new_sig();
-/// 
-/// // Note: Whiteroom lock method is different from 
+///
+/// // Note: Whiteroom lock method is different from
 /// // normal lock method
 /// let lock = owner.as_wr_lock();
-/// 
+///
 /// let key = owner.sign(&msg);
-/// 
+///
 /// // Unlock primitive
 /// assert!(lock.unlock(&key, &msg).is_ok());
 /// ```
-/// 
+///
 /// ## ACCOUNT
-/// 
+///
 /// `ACCOUNT` is a type of `Lock` that proves that a token account owns an asset. They
-/// are a special type of lock 
+/// are a special type of lock
 #[derive(Debug, Clone, Copy, PartialEq, BorshSerialize, BorshDeserialize)]
 pub enum Lock {
     // Single sig containing pubkey hash
@@ -256,40 +251,26 @@ pub enum Lock {
     ACCOUNT(ID),
 }
 
-fn unlock(
-    msg_id: &[u8],
-    pubkey_hash: &[u8],
-    sig: &[u8],
-    pubkey: &[u8],
-) -> AgentResult<()> {
-
+fn unlock(msg_id: &[u8], pubkey_hash: &[u8], sig: &[u8], pubkey: &[u8]) -> AgentResult<()> {
     // Validate pubkey
     if functions::hash(pubkey) != *pubkey_hash {
-        return Err(format!(
-            "Error: Public key does not match Stored hash"
-        ));
+        return Err(format!("Error: Public key does not match Stored hash"));
     }
 
     // Convert SIG from bytes
     let Ok(sig) = Signature::from_bytes(sig) else {
-        return Err(format!(
-            "Error: Signature could not be fetched"
-        ));
+        return Err(format!("Error: Signature could not be fetched"));
     };
 
     // Get verifying key from pubkey
     let Ok(verifying_key) = PublicKey::from_bytes(pubkey) else {
-        return Err(format!(
-            "Error: Public key error"
-        ));
+        return Err(format!("Error: Public key error"));
     };
 
     let ctx = schnorrkel::signing_context(b"");
 
     let Ok(_) = verifying_key.verify(ctx.bytes(msg_id), &sig) else {
-        return Err(format!(
-            "Error: Could not verify key"
-        ));
+        return Err(format!("Error: Could not verify key"));
     };
 
     Ok(())
@@ -300,23 +281,23 @@ impl Lock {
         match (self, key) {
             (Self::SIG(pubkey_hash), Key::SIG(sig, pubkey)) => {
                 unlock(msg_id, pubkey_hash, sig, pubkey)
-            },
+            }
             (Self::WHITEROOM(wr_owner), Key::SIG(sig, pubkey)) => {
                 unlock(msg_id, wr_owner, sig, pubkey)
             }
-            _=> Ok(())
+            _ => Err(format!("Error: Unsupported Lock and Key combinations")),
         }
     }
 
     // Create a new acc_id
     pub fn acc(tid: ID) -> Self {
         Self::ACCOUNT(tid)
-    } 
+    }
 }
 
 /// # Key
 /// `Key` is used to unlock a `Lock` type and prove ownership of a locked primitive.
-/// 
+///
 /// **see `Lock`**
 #[derive(Debug, Clone, PartialEq, BorshSerialize, BorshDeserialize)]
 pub enum Key {
@@ -326,16 +307,15 @@ pub enum Key {
     ACCOUNT,
 }
 
-
 // TODO: Whiteroom Signature
 
 #[cfg(test)]
 mod tests {
 
-use marketplace_helpers::{objects::{Hash}};
+    use marketplace_helpers::objects::Hash;
 
-use crate::wallet::Wallet;
     use super::*;
+    use crate::wallet::Wallet;
 
     fn message() -> ID {
         functions::dum_bytes()
@@ -343,7 +323,7 @@ use crate::wallet::Wallet;
 
     // Whiteroom Sig
     #[test]
-    fn whiteroom_sig() {
+    fn whiteroom_sig() -> AgentResult<()> {
         // Whiteroom owner
         let wr_owner = Owner::new_sig();
 
@@ -351,7 +331,8 @@ use crate::wallet::Wallet;
         let wr_lock = wr_owner.as_wr_lock();
 
         // Wallet signs message
-        wr_owner.sign(&message());
+        let key = wr_owner.sign(&message().id());
+        wr_lock.unlock(&key, &message().id())
     }
 
     // Single sig
@@ -381,7 +362,6 @@ use crate::wallet::Wallet;
 
         // Use invalid message id
         assert!(owner.unlock(&key, &[67; 32]).is_err())
-
     }
 
     // An owner rebuilt from keypair bytes should retain the same public key and lock identity.
@@ -415,5 +395,17 @@ use crate::wallet::Wallet;
         let account_id = [42u8; 32];
 
         assert_eq!(Lock::acc(account_id), Lock::ACCOUNT(account_id));
+    }
+
+    // Test unsupported lock and key combinations
+    #[test]
+    fn unsupported_key_lock_combo() {
+        let owner = Owner::new_sig();
+        let msg_id = [255u8; 32];
+
+        let key = Key::ACCOUNT;
+        let lock = owner.as_lock();
+
+       assert!(lock.unlock(&key, &msg_id).is_err()) 
     }
 }

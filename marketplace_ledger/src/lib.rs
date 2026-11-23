@@ -1,12 +1,12 @@
-pub mod state;
-mod job;
 mod blockchain;
+mod job;
 mod mempool;
+pub mod state;
 
-pub use state::{Balances, State, DefaultBalances};
-pub use job::Jobs;
 pub use blockchain::Blockchain;
+pub use job::Jobs;
 pub use mempool::Mempool;
+pub use state::{Balances, DefaultBalances, State};
 
 #[cfg(test)]
 mod tests {
@@ -19,14 +19,14 @@ mod tests {
     fn public_ledger_types_can_be_constructed() {
         let state = State::<DefaultBalances>::new();
         let jobs = Jobs::new();
-        let mut mempool = Mempool::new();
+        let mempool = Mempool::new();
         let owner = Owner::new_sig();
 
         assert_eq!(
             state.get_gdc_balance(owner.as_lock()),
             marketplace_helpers::objects::WU::default()
         );
-        assert!(mempool.get_proposal_to_finalize().is_none());
+        assert!(mempool.get_proposal().is_none());
         drop(jobs);
     }
 }

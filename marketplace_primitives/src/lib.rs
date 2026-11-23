@@ -1,7 +1,6 @@
 // Parallel Execution
 pub mod par_exec;
 
-
 // Synchronous finalization
 pub mod sync_final;
 

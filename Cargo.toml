@@ -1,3 +1,3 @@
 [workspace]
 resolver = "3"
-members = ["marketplace_core","marketplace_helpers", "marketplace_ledger", "marketplace_p2p", "marketplace_primitives", "marketplace_wallet", "marketplace_worker"]
+members = ["marketplace_core","marketplace_helpers", "marketplace_ledger", "marketplace_node", "marketplace_p2p", "marketplace_primitives", "marketplace_wallet", "marketplace_worker"]

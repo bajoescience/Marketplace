@@ -1,10 +1,13 @@
-use std::{collections::{HashMap}, format};
+use std::{collections::HashMap, format};
 
 use arrayvec::ArrayVec;
 use borsh::{BorshDeserialize, BorshSerialize};
-use marketplace_helpers::{functions, objects::{AgentResult, ID}};
+use marketplace_helpers::{
+    functions,
+    objects::{AgentResult, ID},
+};
 
-// Consensus trait to prove what it means 
+// Consensus trait to prove what it means
 // for a whiteroom to agree
 pub trait WRVote: PartialEq {
     fn as_vote(&self) -> ID;
@@ -15,8 +18,8 @@ pub trait WRVote: PartialEq {
 
 #[derive(BorshSerialize, BorshDeserialize, Debug, Clone)]
 pub struct Whiteroom<T, const MAX: usize>
-where 
-    T: WRVote + BorshSerialize + BorshDeserialize
+where
+    T: WRVote + BorshSerialize + BorshDeserialize,
 {
     list: ArrayVec<T, MAX>,
 
@@ -28,10 +31,10 @@ where
 }
 
 impl<T, const MAX: usize> Whiteroom<T, MAX>
-where 
-    T: WRVote + BorshSerialize + BorshDeserialize
+where
+    T: WRVote + BorshSerialize + BorshDeserialize,
 {
-    /// Initialize 
+    /// Initialize
     pub fn new() -> Whiteroom<T, MAX> {
         Self {
             list: ArrayVec::new(),
@@ -49,22 +52,21 @@ where
 
     /// Serialize whiteroom
     pub fn serialize(&self) -> Vec<u8> {
-        borsh::to_vec(&self)
-            .expect("Illegal: Error Serializing Whiteroom")
+        borsh::to_vec(&self).expect("Illegal: Error Serializing Whiteroom")
     }
 }
 
 // Getter methods
 impl<T, const MAX: usize> Whiteroom<T, MAX>
-where 
-    T: WRVote + BorshSerialize + BorshDeserialize
+where
+    T: WRVote + BorshSerialize + BorshDeserialize,
 {
     /// Check if whiteroom is full
     /// by amount of votes, not amount of individual whiteroom members
-    /// 
-    /// This means if the members contribute varying amount of votes, the whiteroom can 
+    ///
+    /// This means if the members contribute varying amount of votes, the whiteroom can
     /// be full before it reaches maximum voter capacity
-    /// 
+    ///
     /// Although once capacity is reached, then the whiteroom is always full
     pub fn is_full(&self) -> bool {
         self.list.is_full() || (self.len() >= self.list.capacity())
@@ -79,23 +81,25 @@ where
         self.list.iter()
     }
 
+    // Owned whiteroom members
+    pub fn owned_members(&mut self) -> impl Iterator<Item = T> {
+        self.list.drain(..)
+    }
+
     // Gwt winning members
     pub fn winners(&self) -> impl Iterator<Item = &T> {
-        self.members()
-            .filter(
-                |member| {
-                    if let Some(winning_vote) = self.winning_vote() {
-                        member.as_vote() == *winning_vote.0
-                    } else {
-                        false
-                    }   
-                }
-            )
+        self.members().filter(|member| {
+            if let Some(winning_vote) = self.winning_vote() {
+                member.as_vote() == *winning_vote.0
+            } else {
+                false
+            }
+        })
     }
 
     // Checks if current members have reached consensus
     pub fn is_consensus(&self) -> bool {
-        // Expected whiteroom size 
+        // Expected whiteroom size
         let exp_size = self.expected;
 
         // Check if winning vote has greater count than threshold
@@ -109,9 +113,9 @@ where
     }
 
     /// Check if consensus is still possible
-    /// 
+    ///
     /// returns true if possible
-    /// 
+    ///
     /// and false if not possible
     pub fn can_consensus(&self) -> bool {
         // Whiteroom can only reach consensus when less than 2
@@ -121,19 +125,13 @@ where
 
         let effective_thresh = exp_size - functions::bft_thresh(exp_size);
 
-        let count = self.votes
+        let count = self
+            .votes
             .iter()
-            .filter(
-                |&(_, vote)|
-                 *vote > effective_thresh
-            )
+            .filter(|&(_, vote)| *vote > effective_thresh)
             .count();
 
-        if count < 2 {
-            true
-        } else {
-            false
-        }
+        if count < 2 { true } else { false }
     }
 
     // Get winning votes
@@ -144,26 +142,22 @@ where
 
 // Setter methods
 impl<T, const MAX: usize> Whiteroom<T, MAX>
-where 
-    T: WRVote + BorshSerialize + BorshDeserialize
+where
+    T: WRVote + BorshSerialize + BorshDeserialize,
 {
     // Add a new whiteroom member
     pub fn add_member(&mut self, member: T) -> AgentResult<usize> {
         if self.list.is_full() {
-            return Err(format!(
-                "Error: Whiteroom is already full"
-            ))
+            return Err(format!("Error: Whiteroom is already full"));
+        }
+
+        // Ensure no duplicates
+        if self.list.contains(&member) {
+            return Err(format!("Error: Duplicate Whiterooom Member"));
         }
 
         // Increase whiteroom member vote's count
         *self.votes.entry(member.as_vote()).or_insert(0) += member.votes();
-
-        // Ensure no duplicates
-        if self.list.contains(&member) {
-            return Err(format!(
-                "Error: Duplicate Whiterooom Member"
-            ))
-        }
 
         self.list.push(member);
         Ok(self.len())
@@ -174,8 +168,8 @@ where
 mod tests {
     use std::assert_eq;
 
-use super::*;
-use marketplace_helpers::{objects::{CONTRACT_WHITEROOM_SIZE}};
+    use super::*;
+    use marketplace_helpers::objects::CONTRACT_WHITEROOM_SIZE;
 
     const MAX: usize = functions::max_wr_size_from_expected(CONTRACT_WHITEROOM_SIZE);
 
@@ -196,10 +190,7 @@ use marketplace_helpers::{objects::{CONTRACT_WHITEROOM_SIZE}};
     // Add a member to a whiteroom
     #[test]
     fn add_member_whiteroom() -> AgentResult<()> {
-        let member = TestMember(
-            0,
-            functions::dum_bytes()
-        );
+        let member = TestMember(0, functions::dum_bytes());
 
         let mut whiteroom = Whiteroom::<_, MAX>::new();
 
@@ -213,15 +204,9 @@ use marketplace_helpers::{objects::{CONTRACT_WHITEROOM_SIZE}};
     #[test]
     fn add_dup_member_whiteroom() -> AgentResult<()> {
         // Duplicate members
-        let member0 = TestMember(
-            0,
-            functions::dum_bytes()
-        );
+        let member0 = TestMember(0, functions::dum_bytes());
 
-        let member = TestMember(
-            0,
-            functions::dum_bytes()
-        );
+        let member = TestMember(0, functions::dum_bytes());
 
         let mut whiteroom = Whiteroom::<_, MAX>::new();
 
@@ -238,7 +223,6 @@ use marketplace_helpers::{objects::{CONTRACT_WHITEROOM_SIZE}};
     fn is_consensus_whiteroom() -> AgentResult<()> {
         let mut wr = Whiteroom::<_, MAX>::new();
 
-        
         // Create 2 members
         // This is less than whiteroom's BFT threshold
         // can't reach consensus

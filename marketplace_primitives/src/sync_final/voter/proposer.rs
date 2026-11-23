@@ -1,10 +1,18 @@
 use std::{collections::HashMap, format};
 
 use borsh::{BorshDeserialize, BorshSerialize};
-use marketplace_helpers::{functions, objects::{AgentResult, ID, IdHash}};
-use marketplace_wallet::{Key, Lock, Owner, voting::{self, Role, VotingProof}};
+use marketplace_helpers::{
+    functions,
+    objects::{AgentResult, ID, IdHash},
+};
+use marketplace_wallet::{
+    Key, Lock, Owner,
+    voting::{self, Role, VotingProof},
+};
 
-use crate::{Verify, sync_final::{Block, voter::Voter}};
+use crate::{
+    Verify, sync_final::{Block, BlockHeader, voter::Voter},
+};
 
 // This is a validator role
 const ROLE: Role = Role::Proposer;
@@ -28,7 +36,7 @@ impl Proposer {
 
         Self {
             proof: votingproof,
-            block
+            block,
         }
     }
 
@@ -55,15 +63,17 @@ impl Proposer {
 impl Voter for Proposer {
     /// Get lock object representing proposer
     fn owner(&self) -> Lock {
-        Lock::SIG(
-            functions::hash(self.pk())
-        )
+        Lock::SIG(functions::hash(self.pk()))
     }
 
     fn get_vrf_opt(&self) -> AgentResult<ID> {
         let seed = self.block.header().prev();
 
         self.verify(&seed)
+    }
+
+    fn header(&self) -> BlockHeader {
+        *self.block().header()
     }
 }
 
@@ -82,20 +92,20 @@ pub struct Proposal {
     voter: Proposer,
 
     // Authenticate proposer
-    auth: HashMap<ID, Key>
+    auth: HashMap<ID, Key>,
 }
 
 impl Proposal {
     pub fn new(proposer: Proposer, auth: HashMap<ID, Key>) -> Self {
         Self {
             voter: proposer,
-            auth
+            auth,
         }
     }
 }
 
 // Getter methods
-impl Proposal {   
+impl Proposal {
     pub fn proposer(&self) -> &Proposer {
         &self.voter
     }
@@ -115,7 +125,7 @@ impl Verify for Proposal {
             return Err(format!(
                 "Err: Key for Lock {} does not exist",
                 functions::from_bytes(&owner.id())
-            ))
+            ));
         };
 
         owner.unlock(key, &self.proposer().id())
@@ -128,7 +138,7 @@ mod tests {
 
     use crate::{
         Verify,
-        sync_final::{Block, Proposer, Proposal, voter::Voter},
+        sync_final::{Block, Proposal, Proposer, voter::Voter},
     };
 
     // A proposer should retain its block and create a verifiable proof from its previous-block seed.

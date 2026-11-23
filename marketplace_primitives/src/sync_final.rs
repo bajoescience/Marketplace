@@ -3,8 +3,8 @@ pub mod block;
 pub mod blockinfo;
 pub mod voter;
 
-pub use self::block::{BlockHeader, Block, BlockBody};
-pub use voter::{Proposer, Validator, Proposal, Validated};
+pub use self::block::{Block, BlockBody, BlockHeader};
+pub use voter::{Proposal, Proposer, Validated, Validator};
 
 #[cfg(test)]
 mod tests {

@@ -7,14 +7,16 @@ pub use self::tx::TxContract;
 use borsh::{BorshDeserialize, BorshSerialize};
 
 use crate::{
-    Verify, helpers::objects::{AgentResult, ID, WU}, par_exec::TxOpt,
+    Verify,
+    helpers::objects::{AgentResult, ID, WU},
+    par_exec::TxOpt,
 };
 
 // Contract type for a job
 #[derive(BorshSerialize, BorshDeserialize, Debug, Clone)]
 pub enum Contract {
     JOB(JobContract),
-    TX(TxContract)
+    TX(TxContract),
 }
 
 impl Contract {
@@ -38,28 +40,27 @@ impl Contract {
     pub fn id(&self) -> ID {
         match self {
             Self::JOB(jobctr) => jobctr.id(),
-            Self::TX(txctr) => txctr.id()
+            Self::TX(txctr) => txctr.id(),
         }
     }
 
     /// Contract utxo outputs
     pub fn opts(&self) -> Vec<TxOpt> {
         match self {
-            Self::JOB(jobctr) => {
-                jobctr.get_tx().unwrap()
-                    .opts()
-                    .into_iter()
-                    .map(|opt| *opt)
-                    .collect()
-            },
-            Self::TX(txctr) => {
-                txctr.get_txs()
-                    .iter()
-                    .map(|tx| tx.opts().iter())
-                    .flatten()
-                    .map(|opt| *opt)
-                    .collect()
-            }
+            Self::JOB(jobctr) => jobctr
+                .get_tx()
+                .unwrap()
+                .opts()
+                .into_iter()
+                .map(|opt| *opt)
+                .collect(),
+            Self::TX(txctr) => txctr
+                .get_txs()
+                .iter()
+                .map(|tx| tx.opts().iter())
+                .flatten()
+                .map(|opt| *opt)
+                .collect(),
         }
     }
 }
@@ -70,14 +71,13 @@ impl PartialEq for Contract {
     }
 }
 
-impl Eq for Contract {
-}
+impl Eq for Contract {}
 
 impl Verify for Contract {
     fn verify(&self) -> AgentResult<()> {
         match self {
             Self::JOB(jobctr) => jobctr.verify(),
-            Self::TX(txctr) => txctr.verify()
+            Self::TX(txctr) => txctr.verify(),
         }
     }
 }
@@ -89,7 +89,8 @@ pub mod tests {
 
     use marketplace_helpers::functions;
 
-use crate::{
+    use crate::{
+        Verify,
         helpers::objects::{AgentResult, CONTRACT_WHITEROOM_SIZE, IdHash, WU},
         par_exec::{
             Bill, Tx, TxIdentifier, TxOpt, TxOptRef,
@@ -97,25 +98,24 @@ use crate::{
         },
         sync_final::BlockHeader,
         wallet::Owner,
-        Verify,
     };
 
     use super::{Contract, JobContract, TxContract};
 
     // Test Job contract
-    pub fn jobctr() -> AgentResult<JobContract>  {
+    pub fn jobctr() -> AgentResult<JobContract> {
         let ipt_owner = Owner::new_sig();
 
         // Block header
         let blk_hdr = BlockHeader::genesis();
 
         // Input
-        let workptr = workptr(&ipt_owner, blk_hdr.id());
+        let workptr = workptr(&ipt_owner, blk_hdr);
         let vdf_diff = functions::vdf_difficulty(workptr.work_size().into(), blk_hdr.vrf_t());
-        let mut jobctr = JobContract::new(workptr, blk_hdr.clone());
-        
+        let mut jobctr = JobContract::new(workptr);
+
         // ResultPtr Initializers
-        let work_id = jobctr.input().id();
+        let work_id = jobctr.work().id();
 
         let mut handles = Vec::new();
 
@@ -125,15 +125,11 @@ use crate::{
                 let wr_owner = Owner::new_sig();
 
                 // Result
-                let result_ptr = resultptr(
-                    work_id,
-                    &wr_owner,
-                    vdf_diff
-                );
+                let result_ptr = resultptr(work_id, &wr_owner, vdf_diff);
 
                 let key = wr_owner.sign(&result_ptr.id());
                 (result_ptr, wr_owner.as_wr_lock(), key)
-            })); 
+            }));
         }
 
         for handle in handles {
@@ -169,14 +165,13 @@ use crate::{
     pub fn txctr() -> AgentResult<TxContract> {
         let owner = Owner::new_sig();
 
-        let ipts = vec![
-            TxOptRef::new([255; 32], 0)
-        ];
+        let ipts = vec![TxOptRef::new([255; 32], 0)];
 
-        let opts = Some(vec![
-            TxOpt::new(owner.as_lock(), WU::try_from(20000).unwrap())
-        ]);
-        
+        let opts = Some(vec![TxOpt::new(
+            owner.as_lock(),
+            WU::try_from(20000).unwrap(),
+        )]);
+
         let tx = Tx::new(0, TxIdentifier::COIN, Some(ipts), opts);
 
         let bill = Bill::new(vec![tx]);

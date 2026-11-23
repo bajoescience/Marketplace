@@ -1,9 +1,12 @@
 use borsh::{BorshDeserialize, BorshSerialize};
-use marketplace_helpers::{functions, objects::{ID, IdHash, VRF_T, WU}};
+use marketplace_helpers::{
+    functions,
+    objects::{ID, IdHash, VRF_T, WU},
+};
 
-use crate::{sync_final::block::BlockBody};
+use crate::sync_final::block::BlockBody;
 
-#[derive(BorshSerialize, BorshDeserialize, Debug, Clone)]
+#[derive(BorshSerialize, BorshDeserialize, Debug, Clone, Copy)]
 pub struct BlockHeader {
     // Block number starting from 0 (genesis block)
     index: u64,
@@ -42,22 +45,16 @@ impl BlockHeader {
 
     // New Block Header instance
     // Usually created with Blockchain
-    pub fn new(
-        prev_header: &BlockHeader,
-        body: &BlockBody, 
-    ) -> Self {
+    pub fn new(prev_header: &BlockHeader, body: &BlockBody) -> Self {
         Self {
             index: prev_header.index() + 1,
             ctr_merkle_root: body.root(),
             prev: prev_header.id(),
             total_gdc: body.total() + prev_header.total_gdc,
 
-            // Calculate new VRF threshold 
+            // Calculate new VRF threshold
             // as described in whitepaper.
-            vrf_t: functions::get_vrf(
-                body.wr_avg(), 
-                prev_header.vrf_t()
-            ),
+            vrf_t: functions::get_vrf(body.wr_avg(), prev_header.vrf_t()),
         }
     }
 }
@@ -86,9 +83,7 @@ impl BlockHeader {
 }
 
 // Setter methods
-impl BlockHeader {
-   
-}
+impl BlockHeader {}
 
 impl PartialEq for BlockHeader {
     fn eq(&self, other: &Self) -> bool {

@@ -1,5 +1,5 @@
 //! # Bill
-//! 
+//!
 //! A list of related transactions to be finalized by the network
 
 use borsh::{BorshDeserialize, BorshSerialize};
@@ -16,7 +16,7 @@ impl Bill {
 
     // Initialize genesis Bill for currencies
     pub fn genesis() -> Self {
-        Self (vec![Tx::genesis(), Tx::gtt()])
+        Self(vec![Tx::genesis(), Tx::gtt()])
     }
 }
 
@@ -47,6 +47,9 @@ mod tests {
 
         assert_eq!(bill.get_txs().len(), 2);
         assert!(matches!(bill.get_txs()[0].tid(), TxIdentifier::COIN));
-        assert!(matches!(bill.get_txs()[1].tid(), TxIdentifier::TOKEN(Some(_))));
+        assert!(matches!(
+            bill.get_txs()[1].tid(),
+            TxIdentifier::TOKEN(Some(_))
+        ));
     }
 }

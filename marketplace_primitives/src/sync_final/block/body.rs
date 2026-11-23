@@ -1,13 +1,13 @@
-use std::vec;
 use borsh::{BorshDeserialize, BorshSerialize};
 use marketplace_helpers::objects::{CONTRACT_WHITEROOM_SIZE, ID, WU};
 use rs_merkle::{MerkleTree, algorithms::Sha256};
+use std::vec;
 
 use crate::par_exec::Contract;
 
 #[derive(Debug, Clone, BorshSerialize, BorshDeserialize)]
 pub struct BlockBody {
-    ctrs: Vec<Contract>
+    ctrs: Vec<Contract>,
 }
 
 impl BlockBody {
@@ -19,8 +19,13 @@ impl BlockBody {
     // Genesis Block
     pub fn genesis() -> Self {
         Self {
-            ctrs: vec![Contract::genesis()]
-        }  
+            ctrs: vec![Contract::genesis()],
+        }
+    }
+
+    /// Empty block
+    pub fn empty() -> Self {
+        Self { ctrs: Vec::new() }
     }
 }
 
@@ -41,11 +46,10 @@ impl BlockBody {
         self.ctrs.into_iter()
     }
 
-    // Average whiteroom size of every 
+    // Average whiteroom size of every
     // job contract in the block
     pub fn wr_avg(&self) -> usize {
-        let (sum, count) = self.contents()
-        .fold((0, 0), |(mut sum, mut count), ctr| {
+        let (sum, count) = self.contents().fold((0, 0), |(mut sum, mut count), ctr| {
             if let Contract::JOB(jobctr) = ctr {
                 sum += jobctr.wr_len();
 
@@ -61,7 +65,7 @@ impl BlockBody {
         // this is to slash the VRF threshold by half
         // which is the most a VRF threshold can be reduced.
         if count == 0 {
-            return CONTRACT_WHITEROOM_SIZE / 2
+            return CONTRACT_WHITEROOM_SIZE / 2;
         }
 
         // Convert average to usize
@@ -73,21 +77,15 @@ impl BlockBody {
 
     // Total amount of new gdc coins in block
     pub fn total(&self) -> WU {
-        self.ctrs
-        .iter()
-        .map(|ctr| ctr.new_coins())
-        .sum()
+        self.ctrs.iter().map(|ctr| ctr.new_coins()).sum()
     }
 
     // The id of the block is the merkle root hash
     // of all the contracts
     pub fn root(&self) -> Option<ID> {
         // Hash every contract as the leaf of the merkel tree
-        let leaves: Vec<ID> = self.ctrs
-            .iter()
-            .map(|ctr| ctr.id())
-            .collect();
-        
+        let leaves: Vec<ID> = self.ctrs.iter().map(|ctr| ctr.id()).collect();
+
         // Merkle tree
         let merkle_tree = MerkleTree::<Sha256>::from_leaves(&leaves);
         merkle_tree.root()
@@ -113,16 +111,19 @@ impl BlockBody {
 
 #[cfg(test)]
 mod tests {
+    use marketplace_helpers::{
+        functions,
+        objects::{AgentResult, CONTRACT_WHITEROOM_SIZE, IdHash},
+    };
+    use marketplace_wallet::Owner;
     use std::{assert_eq, thread};
-    use marketplace_helpers::{functions, objects::{AgentResult, CONTRACT_WHITEROOM_SIZE, IdHash}};
-use marketplace_wallet::Owner;
 
-use crate::{
-    par_exec::{Bill, JobContract, TxContract},
-    sync_final::BlockHeader,
-};
-    use crate::par_exec::contract::job::tests::{resultptr, workptr};
     use super::*;
+    use crate::par_exec::contract::job::tests::{resultptr, workptr};
+    use crate::{
+        par_exec::{Bill, JobContract, TxContract},
+        sync_final::BlockHeader,
+    };
 
     // Valid Job contract
     pub fn jobctr() -> AgentResult<JobContract> {
@@ -132,13 +133,13 @@ use crate::{
         let blk_hdr = BlockHeader::genesis();
 
         // Initialize valid Work Ptr
-        let workptr = workptr(&owner, blk_hdr.id());
+        let workptr = workptr(&owner, blk_hdr);
         let vdf_diff = functions::vdf_difficulty(workptr.work_size().into(), blk_hdr.vrf_t());
-        let mut jobctr = JobContract::new(workptr, blk_hdr.clone());
+        let mut jobctr = JobContract::new(workptr);
 
         // Initialize size result pointers
         // ResultPtr Initializers
-        let work_id = jobctr.input().id();
+        let work_id = jobctr.work().id();
 
         let mut handles = Vec::new();
 
@@ -148,16 +149,12 @@ use crate::{
                 let wr_owner = Owner::new_sig();
 
                 // Result
-                let result_ptr = resultptr(
-                    work_id,
-                    &wr_owner,
-                    vdf_diff
-                );
+                let result_ptr = resultptr(work_id, &wr_owner, vdf_diff);
 
                 let key = wr_owner.sign(&result_ptr.id());
 
                 (result_ptr, wr_owner.as_wr_lock(), key)
-            })); 
+            }));
         }
 
         for handle in handles {
@@ -179,7 +176,7 @@ use crate::{
         assert_eq!(block.len(), 1);
     }
 
-    // Test whiteroom size of an empty block is 
+    // Test whiteroom size of an empty block is
     // set to half of the expected whiteroom size
     #[test]
     fn avg_wr_size_of_empty_block() {
@@ -188,13 +185,14 @@ use crate::{
         assert_eq!(block.wr_avg(), CONTRACT_WHITEROOM_SIZE / 2)
     }
 
-
     // Test the average whiteroom size of a block
     #[test]
     fn avg_wr_size_of_block() -> AgentResult<()> {
-        let block = BlockBody::new(
-            vec![Contract::JOB(jobctr()?), Contract::JOB(jobctr()?), Contract::JOB(jobctr()?)]
-        );
+        let block = BlockBody::new(vec![
+            Contract::JOB(jobctr()?),
+            Contract::JOB(jobctr()?),
+            Contract::JOB(jobctr()?),
+        ]);
 
         assert_eq!(block.wr_avg(), CONTRACT_WHITEROOM_SIZE);
         Ok(())

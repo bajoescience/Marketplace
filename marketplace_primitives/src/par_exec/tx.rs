@@ -4,18 +4,24 @@ use std::{format, panic, vec};
 
 pub use io::{TxOpt, TxOptRef};
 
+use crate::wallet::Lock;
+use crate::{
+    Verify,
+    helpers::{
+        functions::{self, fee_price},
+        objects::{AgentResult, ID, IdHash, WU},
+    },
+    par_exec::JobContract,
+};
 use borsh::{BorshDeserialize, BorshSerialize};
 use chrono::{TimeZone, Utc};
-use crate::{par_exec::JobContract, Verify, helpers::{functions::{self, fee_price}, objects::{AgentResult, ID, IdHash, WU}}};
-use crate::wallet::{Lock};
-
 
 /// ## Transaction identifier `TxIdentifier`
-/// 
+///
 /// `TxIdentifier` identifies different types of currencies:
-/// 
+///
 /// - `Coin` represents native goldcoin
-/// 
+///
 /// - `Token` represents any other currency with it's own identification `ID`
 /// being it's account hash
 #[derive(BorshSerialize, BorshDeserialize, Debug, Clone)]
@@ -25,16 +31,16 @@ pub enum TxIdentifier {
 }
 
 /// ## Transaction `Tx`
-/// 
+///
 /// `Tx` is a structure describing a change of ownership
 /// of assets between identities.
-/// 
+///
 /// A `Tx` consists of inputs and outputs where:
-/// 
+///
 /// - Inputs are the entity referencing a previous Transaction output.
-/// 
-/// - Outputs are the entity representing an asset. 
-/// 
+///
+/// - Outputs are the entity representing an asset.
+///
 /// `Tx` input sum must always equal output sum
 #[derive(BorshSerialize, BorshDeserialize, Debug, Clone)]
 pub struct Tx {
@@ -51,7 +57,7 @@ pub struct Tx {
 
     // Coin ouputs
     opts: Vec<TxOpt>,
-    
+
     // Timestamp
     timestamp: u64,
 }
@@ -65,36 +71,36 @@ impl PartialEq for Tx {
 impl Tx {
     /// This associated function creates a new instance of transaction
     /// but the inputs and outputs are optional.
-    /// 
+    ///
     /// In that case, both inputs and outputs are represented as empty
     /// vectors.
-    /// 
+    ///
     /// # Example
-    /// 
+    ///
     /// ```
     ///     use marketplace_primitives::par_exec::{Tx, TxIdentifier};
-    /// 
+    ///
     /// let ver = 1;
     /// let tid = TxIdentifier::COIN;
-    /// 
+    ///
     /// let tx = Tx::new(ver, tid, None, None);
-    /// 
-    /// 
+    ///
+    ///
     /// assert!(tx.ipts().is_empty());
     /// assert!(tx.opts().is_empty());
     /// ```
-    
+
     // Create a new `Tx` with optional inputs and outputs
     pub fn new(
-        ver: u32, 
-        tid: TxIdentifier, 
+        ver: u32,
+        tid: TxIdentifier,
         ipts: Option<Vec<TxOptRef>>,
         opts: Option<Vec<TxOpt>>,
     ) -> Self {
         // tid is provided upfront and not validated
         // Because validation needs access to state
         // We'll later validate for each input,
-        // 
+        //
         // it's source transaction must be of the same tid TxIdentifier as the new one
         // If even one input tid differs, transaction cannot be validated
         // Error is returned
@@ -110,14 +116,14 @@ impl Tx {
     /// This associated method is used
     /// to convert a Job contract into a transaction
     /// that sends the job price to whiteroom winning members
-    /// 
+    ///
     /// Any remainders encountered during errors it sends back
     /// to the job owner after the Tx instance has been created
     pub fn from_contract(ver: u32, ctr: &JobContract) -> AgentResult<Self> {
         // Employer input represented by TxOptRef
-        let ipts = ctr.input().ipts().clone();
+        let ipts = ctr.work().ipts().clone();
 
-        let work_size = ctr.input().work_size();
+        let work_size = ctr.work().work_size();
 
         // Outputs
         // Only winning whiteroom members receive the pay
@@ -125,14 +131,14 @@ impl Tx {
 
         // Initalize amount spent by a whiteroom resultptr
         // that won consensus given that every winning whiteroom
-        // member share the same result. 
+        // member share the same result.
         let spent = ctr.spent()?;
 
         // If spent is less than work size, send remainder back
         if spent < work_size {
             opts.push(TxOpt::new(
-                ctr.input().remainder(),
-                work_size.into() - spent.into()
+                ctr.work().remainder(),
+                work_size.into() - spent.into(),
             ));
         }
 
@@ -145,10 +151,7 @@ impl Tx {
         for witness in ctr.output().winners() {
             let fee = fee_price(spent.into());
 
-            let wr_opt = TxOpt::new(
-                witness.witness(), 
-                spent.into() - fee
-            );
+            let wr_opt = TxOpt::new(witness.witness(), spent.into() - fee);
 
             // Add fee to overall fees
             fees = fees + fee;
@@ -157,10 +160,7 @@ impl Tx {
         }
 
         // Add fees to outputs
-        opts.push(TxOpt::new(
-            Lock::ACCOUNT(Self::gtt_tid()),
-            fees
-        ));
+        opts.push(TxOpt::new(Lock::ACCOUNT(Self::gtt_tid()), fees));
 
         Ok(Self {
             tid: TxIdentifier::COIN,
@@ -169,10 +169,9 @@ impl Tx {
             opts,
             timestamp: functions::timestamp(),
         })
-
     }
 
-    /// New account tokens have no inputs as they are 
+    /// New account tokens have no inputs as they are
     /// a start of a new currency.
     /// But this token initializer tx must be unique
     /// so that the token can be unique.
@@ -189,24 +188,18 @@ impl Tx {
 
         // Panicing should be impossible as it only
         // panics when the tid is not a Token
-        acc.set_tid(tid)
-            .expect("Tx is clearly a token");
+        acc.set_tid(tid).expect("Tx is clearly a token");
 
         acc
     }
 
     // Initialize genesis state for goldcoin
     pub fn genesis() -> Self {
-        // Belongs to founder 
-        let opts = vec![TxOpt::new( 
-            Lock::SIG(functions::founders()),
-            WU::GDC(),
-        )];
+        // Belongs to founder
+        let opts = vec![TxOpt::new(Lock::SIG(functions::founders()), WU::GDC())];
 
         // This timestamp is a constant
-        let dt = Utc.with_ymd_and_hms(
-            2027, 1, 1, 0, 0, 0
-        ).unwrap();
+        let dt = Utc.with_ymd_and_hms(2027, 1, 1, 0, 0, 0).unwrap();
 
         Self {
             ver: 0,
@@ -219,16 +212,14 @@ impl Tx {
 
     // GTT token
     pub fn gtt() -> Self {
-        // TODO: Belongs to founder 
-        let opts = vec![TxOpt::new( 
+        // TODO: Belongs to founder
+        let opts = vec![TxOpt::new(
             Lock::SIG(functions::founders()),
             WU::try_from(10u128.pow(20)).unwrap(),
         )];
 
         // This timestamp is a constant
-        let dt = Utc.with_ymd_and_hms(
-            2027, 1, 1, 0, 0, 0
-        ).unwrap();
+        let dt = Utc.with_ymd_and_hms(2027, 1, 1, 0, 0, 0).unwrap();
 
         let mut gtt = Self {
             ver: 0,
@@ -249,7 +240,6 @@ impl Tx {
     // and use state to verify the tx
     // this should be done in state
 }
-
 
 // Getter functions
 impl Tx {
@@ -285,23 +275,21 @@ impl Tx {
 
     // Return sum of outputs
     pub fn opt_sum(&self) -> WU {
-        self.opts()
-            .iter()
-            .map(|opt| opt.amount())
-            .sum()
+        self.opts().iter().map(|opt| opt.amount()).sum()
     }
 
     // Return fees if it exists
     pub fn fees(&self) -> WU {
         self.opts()
             .iter()
-            .map(|opt| 
+            .map(|opt| {
                 if Lock::ACCOUNT(Self::gtt_tid()) != opt.lock() {
                     WU::default()
                 } else {
                     opt.amount()
                 }
-            ).sum()
+            })
+            .sum()
     }
 
     // Check if tx is a coin tx
@@ -316,7 +304,7 @@ impl Tx {
     // Get new account id
     pub fn acc_id(&self) -> ID {
         // Create a new contract
-        // everything is the same 
+        // everything is the same
         // as the contract except for
         // an empty tid
         // and empty inputs
@@ -357,9 +345,9 @@ impl Tx {
 
     /// Add all inputs to the transaction
     /// But each input received with it's Owner
-    /// So as to sign the resultant transaction 
+    /// So as to sign the resultant transaction
     /// afterward
-    
+
     // Add each input to contract
     pub fn add_ipts(&mut self, ipts: Vec<TxOptRef>) {
         self.ipts.extend(ipts);
@@ -372,7 +360,6 @@ impl Tx {
 
     // Verify transaction structire rules
     // for account or coin transactions.
-
 }
 
 // Tx verification moves to the UTXO State to be handled
@@ -380,15 +367,12 @@ impl Tx {
 impl Verify for Tx {
     fn verify(&self) -> AgentResult<()> {
         match self.tid() {
-
             // Goldcoin tx
             TxIdentifier::COIN => {
                 if self.ipts().is_empty() {
-                    return Err(format!(
-                        "Error: Goldcoin transactions must contain inputs"
-                    ));
+                    return Err(format!("Error: Goldcoin transactions must contain inputs"));
                 }
-            },
+            }
 
             // Token tx
             TxIdentifier::TOKEN(acc_id) => {
@@ -405,15 +389,13 @@ impl Verify for Tx {
                         }
                     } else {
                         if self.ipts().is_empty() {
-                            return Err(format!(
-                                "Error: Transactions must contain inputs"
-                            ));
+                            return Err(format!("Error: Transactions must contain inputs"));
                         }
                     }
                 } else {
                     return Err(format!("Error: Tx Token ID not found"));
                 };
-            },
+            }
         }
 
         // Ensure tx has outputs
@@ -429,10 +411,10 @@ impl Verify for Tx {
 mod tests {
     use std::{assert_eq, panic, vec};
 
-use marketplace_helpers::{functions::dum_bytes};
-use marketplace_wallet::{Owner};
+    use marketplace_helpers::functions::dum_bytes;
+    use marketplace_wallet::Owner;
 
-use super::*;
+    use super::*;
 
     // Create a verifiable tx
     // Select strings to exclude some fields
@@ -445,10 +427,7 @@ use super::*;
         let tx = [255u8; 32];
 
         // Send coin from owner to owner
-        let ipt = TxOptRef::new( 
-            tx,
-            0
-        );
+        let ipt = TxOptRef::new(tx, 0);
 
         let opt = TxOpt::new(lock, WU::try_from(20000).unwrap());
 
@@ -457,10 +436,10 @@ use super::*;
         // Select appropiate tx based on test string
         let mut tx = match exclude {
             "false_id" => Tx::new(1, TxIdentifier::TOKEN(Some(dum_bytes())), None, opts),
-            "tid" => Tx::new(1, TxIdentifier::TOKEN(None), None,  opts),
+            "tid" => Tx::new(1, TxIdentifier::TOKEN(None), None, opts),
             "ipts" => Tx::new(1, TxIdentifier::COIN, None, opts),
             "opts" => Tx::new(1, TxIdentifier::COIN, None, None),
-            _ => Tx::new(1, TxIdentifier::COIN, None, opts)
+            _ => Tx::new(1, TxIdentifier::COIN, None, opts),
         };
 
         match exclude {
@@ -470,7 +449,6 @@ use super::*;
                 Ok(tx)
             }
         }
-
     }
 
     // Verify tx with no outputs
@@ -482,7 +460,7 @@ use super::*;
         assert_eq!(err, "Error: Tx must contain outputs")
     }
 
-    // Tx with false token id and no inputs 
+    // Tx with false token id and no inputs
     // should fail
     #[test]
     fn verify_tx_false_id_no_inputs() {
@@ -507,10 +485,7 @@ use super::*;
         let owner = Owner::new_sig();
 
         // Account output
-        let opt = TxOpt::new(
-            owner.as_lock(), 
-            WU::try_from(20000).unwrap()
-        );
+        let opt = TxOpt::new(owner.as_lock(), WU::try_from(20000).unwrap());
 
         let tx = Tx::new_acc(0, Some(vec![opt]));
 
@@ -537,7 +512,7 @@ use super::*;
         assert!(tx.verify().is_ok())
     }
 
-    // Create a new token and 
+    // Create a new token and
     // Verify token ID
     #[test]
     fn new_acc_tx() {
@@ -563,17 +538,9 @@ use super::*;
     // Add input to tx
     #[test]
     fn add_input_to_tx() -> AgentResult<()> {
-        let mut tx = Tx::new(
-            2, 
-            TxIdentifier::COIN, 
-            None,
-            None
-        );
+        let mut tx = Tx::new(2, TxIdentifier::COIN, None, None);
 
-        let ipt = TxOptRef::new(
-            [255; 32],
-            0
-        );
+        let ipt = TxOptRef::new([255; 32], 0);
 
         // Add input to tx
         tx.add_ipts(vec![ipt]);
