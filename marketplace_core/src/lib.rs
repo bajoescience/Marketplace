@@ -429,7 +429,7 @@ impl<T: Balances + Send + Sync> Core<T> {
                 // If still more than, return error
             }
             Ordering::Equal => {
-                if header.prev() != latest_header.prev() {
+                if header.prev() != latest_header.id() {
                     Err(format!(
                         "Err: Invalid blockinfo addition to chain"
                     ))
