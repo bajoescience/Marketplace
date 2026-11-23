@@ -28,10 +28,9 @@
 //! `Work Pointer` message
 //! `Result Pointer` message
 //! `Tx Contract` message
-//! `Block Header` message
-//! `Block` message
+//! `Proposer` message
+//! `Validator` message
 
-mod epoch_state;
 use std::{
     any::{Any, TypeId},
     cmp::Ordering,
@@ -342,6 +341,10 @@ impl<B: Balances + Send + Sync> Core<B> {
 
         // Subusers must be greater than 0
         if subusers > 0 {
+            // Create a new proposal and verify auth
+            let proposal = Proposal::new(proposer.clone(), auth.clone());
+            proposal.verify()?;
+
             // Proposer should be accepted if it contains the block
             // with the highest new gdc extension to the blockchain
             // Equality of gdc is handled by this method, such that only for
@@ -351,10 +354,6 @@ impl<B: Balances + Send + Sync> Core<B> {
                 mempool.update_subusers(subusers);
                 return Ok(());
             };
-
-            // Create a new proposal and verify auth
-            let proposal = Proposal::new(proposer.clone(), auth.clone());
-            proposal.verify()?;
 
             // Validate contracts in a proposal block by checking if
             // contracts exists in chain cache, if not the contract updates state,
@@ -407,8 +406,10 @@ impl<T: Balances + Send + Sync> Core<T> {
     // compare received block index with node's latest index
     // and handle accordingly
     fn compare_chain(&self, header: &BlockHeader) -> AgentResult<()> {
-        let chain_tip = self.chain.len();
-
+        let latest_header = self.chain.latest_header().unwrap();
+        let chain_tip = latest_header.index() + 1;
+        
+        // Ensure block references prev header
         match chain_tip.cmp(&header.index()) {
             Ordering::Greater => {
                 // If chain tip index header is greater than received block
@@ -423,9 +424,19 @@ impl<T: Balances + Send + Sync> Core<T> {
                 // After receiving all the blocks
                 // compare this block header with the new latest
                 // block
-                return self.compare_chain(header);
+                
+
+                // If still more than, return error
             }
-            Ordering::Equal => Ok(()),
+            Ordering::Equal => {
+                if header.prev() != latest_header.prev() {
+                    Err(format!(
+                        "Err: Invalid blockinfo addition to chain"
+                    ))
+                } else {
+                    Ok(())
+                }
+            },
         }
     }
 
@@ -445,8 +456,12 @@ impl<T: Balances + Send + Sync> Core<T> {
             // Verify owner of validated
             validated.verify()?;
 
-            // Verify valid validator in validated
-            self.verify_voter(validated.validator())?;
+            // Verify subusers in validated
+            if self.verify_voter(validated.validator())? < 1 {
+                return Err(format!(
+                    "Err: Invalid validator"
+                ))
+            };
         }
 
         // The validators in a blockinfo must reach consensus on a block
@@ -456,6 +471,13 @@ impl<T: Balances + Send + Sync> Core<T> {
 
         // Verify proposal
         if let Some(proposal) = blockinfo.proposal() {
+            // Ensure consensus header matches with proposal
+            if proposal.block().header().id() != consensus_header.id() {
+                return Err(format!(
+                    "Err: Blockinfo proposal block must be agreed upon by validators"
+                ));
+            }
+
             // Verify owner of proposal
             proposal.verify()?;
 
@@ -525,7 +547,7 @@ impl<T: Balances + Send + Sync> Core<T> {
                     // If error removing spent utxos, return Err
                     let _ = self
                         .chain
-                        .get_workptr_utxos(jobctr.input(), jobctr.auth())?;
+                        .get_workptr_utxos(jobctr.work(), jobctr.auth())?;
                 }
                 Contract::TX(txctr) => {
                     let _ = self.chain.get_bill_utxos(txctr.bill(), txctr.auth())?;
@@ -677,8 +699,9 @@ impl<T: Balances + Send + Sync> Core<T> {
                 mempool.clear_validators();
             };
 
-            // Add blockinfo to blockchain
-            self.chain.publish_blockinfo(blockinfo).unwrap()
+            // Add blockinfo to blockchain and clear mempool
+            self.chain.publish_blockinfo(blockinfo).unwrap();
+            mempool.clear().await;
         }
     }
 }
@@ -1019,17 +1042,139 @@ mod tests {
         fs::remove_file(path).unwrap();
     }
 
+    // A valid funded bill should reserve its referenced UTXO and add the
+    // corresponding transaction contract to the blockchain cache.
     #[test]
     fn handle_bill_adds_transaction_contract_to_cache() -> AgentResult<()> {
         let (path, _runtime, core) = core("handle_bill");
-        let bill = Bill::genesis();
-        let tx_contract = TxContract::new_with_auth(bill.clone(), HashMap::new());
-        let id = Contract::TX(tx_contract).id();
+        let owner = Owner::new_sig();
+        let amount = WU::try_from(25_000).unwrap();
+        let reference = fund_owner(&core, &owner, amount);
+        let bill = spending_bill(reference, &owner, amount);
+        let mut auth = HashMap::new();
+        auth.insert(owner.as_lock().id(), owner.sign(&bill.id()));
 
-        core.handle_bill(&bill, &HashMap::new())?;
+        core.handle_bill(&bill, &auth)?;
+
+        let tx_contract = TxContract::new_with_auth(bill.clone(), auth);
+        let id = Contract::TX(tx_contract).id();
+        assert_eq!(id, bill.id());
         assert!(core.chain.take_ctr(id).is_some());
+        assert_eq!(core.chain.gdc_balance(owner.as_lock()), WU::default());
+
         fs::remove_file(path).unwrap();
         Ok(())
+    }
+
+    // A handled bill must preserve every referenced input if the bill creates
+    // more coin value than it spends. This test documents the financial
+    // invariant enforced by handle_bill and the required UTXO rollback.
+    #[test]
+    fn handle_bill_rejects_inflated_output_and_preserves_utxo() {
+        let (path, _runtime, core) = core("handle_bill_inflated");
+        let owner = Owner::new_sig();
+        let input_amount = WU::try_from(10_000).unwrap();
+        let input_reference = fund_owner(&core, &owner, input_amount);
+        let bill = Bill::new(vec![Tx::new(
+            1,
+            TxIdentifier::COIN,
+            Some(vec![input_reference]),
+            Some(vec![TxOpt::new(
+                owner.as_lock(),
+                WU::try_from(25_000).unwrap(),
+            )]),
+        )]);
+        let mut auth = HashMap::new();
+        auth.insert(owner.as_lock().id(), owner.sign(&bill.id()));
+
+        assert!(core.handle_bill(&bill, &auth).is_err());
+        assert!(core.chain.cache().is_empty());
+        assert_eq!(core.chain.gdc_balance(owner.as_lock()), input_amount);
+
+        fs::remove_file(path).unwrap();
+    }
+
+    // Work Pointer handling should accept a job only when the requested work
+    // size exactly matches the total referenced input value.
+    #[test]
+    fn handle_job_accepts_exactly_backed_work_pointer() {
+        let (path, _runtime, core) = core("handle_job_exact");
+        let owner = Owner::new_sig();
+        let amount = WU::try_from(10_000).unwrap();
+        let reference = fund_owner(&core, &owner, amount);
+        let work = WorkPtr::new(
+            [71; 32],
+            marketplace_helpers::objects::WorkSize::build(amount).unwrap(),
+            vec![reference],
+            owner.as_lock(),
+            BlockHeader::genesis(),
+            ExecuteTime::NOW,
+        );
+        let mut auth = HashMap::new();
+        auth.insert(owner.as_lock().id(), owner.sign(&work.id()));
+
+        assert!(core.handle_job(&work, &auth).is_ok());
+        assert_eq!(core.chain.gdc_balance(owner.as_lock()), WU::default());
+        assert!(core.jobs.get_job(&work.id()).is_ok());
+
+        fs::remove_file(path).unwrap();
+    }
+
+    // A Work Pointer requesting more value than its inputs contain must be
+    // rejected and must restore the referenced UTXOs to the financial state.
+    #[test]
+    fn handle_job_rejects_unbacked_work_and_preserves_utxos() {
+        let (path, _runtime, core) = core("handle_job_unbacked");
+        let owner = Owner::new_sig();
+        let input_amount = WU::try_from(10_000).unwrap();
+        let reference = fund_owner(&core, &owner, input_amount);
+        let work = WorkPtr::new(
+            [72; 32],
+            marketplace_helpers::objects::WorkSize::build(
+                WU::try_from(25_000).unwrap(),
+            )
+            .unwrap(),
+            vec![reference],
+            owner.as_lock(),
+            BlockHeader::genesis(),
+            ExecuteTime::NOW,
+        );
+        let mut auth = HashMap::new();
+        auth.insert(owner.as_lock().id(), owner.sign(&work.id()));
+
+        assert!(core.handle_job(&work, &auth).is_err());
+        assert!(core.jobs.get_job(&work.id()).is_err());
+        assert_eq!(core.chain.gdc_balance(owner.as_lock()), input_amount);
+
+        fs::remove_file(path).unwrap();
+    }
+
+    // The Work Pointer header is an essential reference. A header not present
+    // in the blockchain must prevent job creation and must not reserve UTXOs.
+    #[test]
+    fn handle_job_rejects_missing_block_header() {
+        let (path, _runtime, core) = core("handle_job_missing_header");
+        let owner = Owner::new_sig();
+        let input_amount = WU::try_from(10_000).unwrap();
+        let reference = fund_owner(&core, &owner, input_amount);
+        let missing_header =
+            BlockHeader::new(&BlockHeader::genesis(), &BlockBody::new(Vec::new()));
+        let work = WorkPtr::new(
+            [73; 32],
+            marketplace_helpers::objects::WorkSize::build(input_amount).unwrap(),
+            vec![reference],
+            owner.as_lock(),
+            missing_header,
+            ExecuteTime::NOW,
+        );
+        let mut auth = HashMap::new();
+        auth.insert(owner.as_lock().id(), owner.sign(&work.id()));
+
+        assert!(core.handle_job(&work, &auth).is_err());
+        assert!(core.jobs.get_job(&work.id()).is_err());
+        assert_eq!(core.chain.gdc_balance(owner.as_lock()), input_amount);
+
+        fs::remove_file(path).unwrap();
     }
 
     #[test]

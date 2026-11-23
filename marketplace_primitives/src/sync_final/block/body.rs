@@ -139,7 +139,7 @@ mod tests {
 
         // Initialize size result pointers
         // ResultPtr Initializers
-        let work_id = jobctr.input().id();
+        let work_id = jobctr.work().id();
 
         let mut handles = Vec::new();
 

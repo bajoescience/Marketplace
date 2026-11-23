@@ -285,7 +285,7 @@ impl Lock {
             (Self::WHITEROOM(wr_owner), Key::SIG(sig, pubkey)) => {
                 unlock(msg_id, wr_owner, sig, pubkey)
             }
-            _ => Ok(()),
+            _ => Err(format!("Error: Unsupported Lock and Key combinations")),
         }
     }
 
@@ -395,5 +395,17 @@ mod tests {
         let account_id = [42u8; 32];
 
         assert_eq!(Lock::acc(account_id), Lock::ACCOUNT(account_id));
+    }
+
+    // Test unsupported lock and key combinations
+    #[test]
+    fn unsupported_key_lock_combo() {
+        let owner = Owner::new_sig();
+        let msg_id = [255u8; 32];
+
+        let key = Key::ACCOUNT;
+        let lock = owner.as_lock();
+
+       assert!(lock.unlock(&key, &msg_id).is_err()) 
     }
 }

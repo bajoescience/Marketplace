@@ -25,8 +25,11 @@ const WHITEROOM_MAX: usize = functions::max_wr_size_from_expected(CONTRACT_WHITE
 /// all the information concerning a job
 #[derive(BorshSerialize, BorshDeserialize, Debug, Clone)]
 pub struct JobContract {
-    input: WorkPtr,
+    work: WorkPtr,
     output: Whiteroom<ResultPtr, WHITEROOM_MAX>,
+
+    // Transaction outputs gotten from workptr
+    
 
     // Authenticate JobContract
     // by locking workptr and
@@ -36,18 +39,18 @@ pub struct JobContract {
 
 impl JobContract {
     // New jobcontract
-    pub fn new(input: WorkPtr) -> Self {
+    pub fn new(work: WorkPtr) -> Self {
         Self {
-            input,
+            work,
             output: Whiteroom::new(),
             auth: HashMap::new(),
         }
     }
 
     /// New jobcontract with auth
-    pub fn new_with_auth(input: WorkPtr, auth: HashMap<ID, Key>) -> Self {
+    pub fn new_with_auth(work: WorkPtr, auth: HashMap<ID, Key>) -> Self {
         Self {
-            input,
+            work,
             output: Whiteroom::new(),
             auth,
         }
@@ -58,7 +61,7 @@ impl JobContract {
 impl JobContract {
     // id
     pub fn id(&self) -> ID {
-        self.input.id()
+        self.work.id()
     }
 
     // Get whiteroom length
@@ -66,14 +69,14 @@ impl JobContract {
         self.output.len()
     }
 
-    // Get the blockheader ID inputed into the JobContract
+    // Get the blockheader ID worked into the JobContract
     pub fn blk_hdr(&self) -> &BlockHeader {
-        &self.input().blk_hdr()
+        &self.work().blk_hdr()
     }
 
     // Get workptr
-    pub fn input(&self) -> &WorkPtr {
-        &self.input
+    pub fn work(&self) -> &WorkPtr {
+        &self.work
     }
 
     // Get whiteroom
@@ -93,7 +96,7 @@ impl JobContract {
 
     // Check if block header is correct
     pub fn is_same_blk_hdr(&self, blk_hdr: &BlockHeader) -> bool {
-        if self.input().blk_hdr() == blk_hdr {
+        if self.work().blk_hdr() == blk_hdr {
             return true;
         }
 
@@ -115,6 +118,13 @@ impl JobContract {
     /// there may be no winning whiteroom result, in that case
     /// method will return Error.
     pub fn spent(&self) -> AgentResult<WorkSize> {
+        // Ensure jobcontract is in consensus
+        if !self.is_consensus() {
+            return Err(format!(
+                "Err: Job has not reached consensus to get amount spent on job"
+            ));
+        }
+        
         self.output()
             .winners()
             .next()
@@ -166,7 +176,7 @@ impl JobContract {
             .map(|resptr| resptr.result().spent().into())
             .sum();
 
-        wr_pay_sum - self.input.work_size().into()
+        wr_pay_sum - self.work.work_size().into()
     }
 
     /// Before attempting to validate a result
@@ -175,15 +185,15 @@ impl JobContract {
     /// To verify the result accordingly
     // Validate each result
     pub fn validate_result(&self, result: &ResultPtr) -> AgentResult<()> {
-        let workptr = self.input();
+        let workptr = self.work();
 
         // Verify that result references workptr
         if result.work_id() != workptr.id() {
             return Err(format!("Error: Invalid WorkPtr Reference"));
         }
 
-        // Ensure input work size is more than output work size
-        if result.result().spent().into() > self.input.work_size().into() {
+        // Ensure work work size is more than output work size
+        if result.result().spent().into() > self.work.work_size().into() {
             return Err(format!("Error: Result must not spend more than work pay."));
         }
 
@@ -194,7 +204,7 @@ impl JobContract {
         // according to the Whitepaper (Page 4)
 
         // TODO: This is to be chnaged depending on the job size
-        let diff = vdf_difficulty(self.input().work_size().into(), self.blk_hdr().vrf_t());
+        let diff = vdf_difficulty(self.work().work_size().into(), self.blk_hdr().vrf_t());
 
         let vrf_result = Crypto::wr_prove(result.wr_proof(), &seed, diff)?;
 
@@ -228,7 +238,7 @@ impl JobContract {
 
 impl Verify for JobContract {
     fn verify(&self) -> AgentResult<()> {
-        // INPUTS
+        // inputs
         // Ensure that
 
         // OUTPUTS
@@ -314,18 +324,18 @@ pub mod tests {
         // Block header
         let blk_hdr = blk_hdr();
 
-        // Input
+        // work
         let workptr = workptr(&ipt_owner, blk_hdr.clone());
         let vdf_diff = functions::vdf_difficulty(workptr.work_size().into(), blk_hdr.vrf_t());
 
         let mut ctr = JobContract::new(workptr);
 
         // Sign workptr and add to ctr
-        let key = ipt_owner.sign(&ctr.input().id());
+        let key = ipt_owner.sign(&ctr.work().id());
         ctr.add_auth(ipt_owner.as_wr_lock(), key);
 
         // Result
-        let result_ptr = resultptr(ctr.input().id(), &wr_owner, vdf_diff);
+        let result_ptr = resultptr(ctr.work().id(), &wr_owner, vdf_diff);
 
         // Sign result and add to job contract
         let key = wr_owner.sign(&result_ptr.id());
@@ -349,14 +359,14 @@ pub mod tests {
         // Block header
         let blk_hdr = blk_hdr();
 
-        // Input
+        // work
         let workptr = workptr(&ipt_owner, blk_hdr);
         let vdf_diff = functions::vdf_difficulty(workptr.work_size().into(), blk_hdr.vrf_t());
 
         let mut ctr = JobContract::new(workptr);
 
         // ResultPtr Initializers
-        let work_id = ctr.input().id();
+        let work_id = ctr.work().id();
 
         let mut handles = Vec::new();
 
@@ -395,9 +405,9 @@ pub mod tests {
         ctr.verify()
     }
 
-    // A new job contract should expose its input and an empty result set.
+    // A new job contract should expose its work and an empty result set.
     #[test]
-    fn new_job_contract_exposes_input_and_empty_output() {
+    fn new_job_contract_exposes_work_and_empty_output() {
         let owner = Owner::new_sig();
         let block_header = blk_hdr();
         let work_ptr = workptr(&owner, block_header);
@@ -405,7 +415,7 @@ pub mod tests {
 
         assert_eq!(contract.id(), work_ptr.id());
         assert_eq!(contract.wr_len(), 0);
-        assert_eq!(contract.input().id(), work_ptr.id());
+        assert_eq!(contract.work().id(), work_ptr.id());
         assert_eq!(contract.blk_hdr().id(), block_header.id());
         assert!(contract.output().members().next().is_none());
         assert!(contract.first_result().is_none());
@@ -413,7 +423,7 @@ pub mod tests {
 
     // Job block-header matching should accept the referenced header only.
     #[test]
-    fn job_contract_matches_only_its_input_block_header() {
+    fn job_contract_matches_only_its_work_block_header() {
         let owner = Owner::new_sig();
         let block_header = blk_hdr();
         let contract = JobContract::new(workptr(&owner, block_header));
@@ -426,10 +436,10 @@ pub mod tests {
     // Adding a valid result should update the result count and first-result accessor.
     #[test]
     fn adding_result_updates_job_contract() -> AgentResult<()> {
-        let input_owner = Owner::new_sig();
+        let work_owner = Owner::new_sig();
         let result_owner = Owner::new_sig();
         let block_header = blk_hdr();
-        let workptr = workptr(&input_owner, block_header);
+        let workptr = workptr(&work_owner, block_header);
         let vdf_diff = functions::vdf_difficulty(workptr.work_size().into(), block_header.vrf_t());
         let mut contract = JobContract::new(workptr);
 
@@ -450,10 +460,10 @@ pub mod tests {
     // Results for another work pointer must be rejected by the job contract.
     #[test]
     fn job_contract_rejects_wrong_work_pointer_reference() {
-        let input_owner = Owner::new_sig();
+        let work_owner = Owner::new_sig();
         let result_owner = Owner::new_sig();
         let block_header = blk_hdr();
-        let workptr = workptr(&input_owner, block_header);
+        let workptr = workptr(&work_owner, block_header);
         let vdf_diff = functions::vdf_difficulty(workptr.work_size().into(), block_header.vrf_t());
         let mut contract = JobContract::new(workptr);
         let result = resultptr([99u8; 32], &result_owner, vdf_diff);

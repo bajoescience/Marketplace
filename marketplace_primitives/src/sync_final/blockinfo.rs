@@ -1,9 +1,8 @@
 use borsh::{BorshDeserialize, BorshSerialize};
-use marketplace_helpers::functions;
+use marketplace_helpers::{functions};
 
 use crate::{
-    par_exec::Whiteroom,
-    sync_final::{voter::Voter, Block, BlockHeader, Proposal, Validated},
+    par_exec::Whiteroom, sync_final::{Block, BlockHeader, Proposal, Validated, voter::Voter},
 };
 
 use marketplace_wallet::voting::EXPECTED_VOTERS;

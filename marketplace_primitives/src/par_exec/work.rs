@@ -78,7 +78,7 @@ pub struct WorkPtr {
     // Address of where work is stored
     work_addr: WorkAddr,
 
-    // Work size in goldcoin
+    // Amount staked in goldcoin
     size: WorkSize,
 
     // Employer UTXOs

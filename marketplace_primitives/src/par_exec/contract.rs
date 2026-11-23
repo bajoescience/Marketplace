@@ -115,7 +115,7 @@ pub mod tests {
         let mut jobctr = JobContract::new(workptr);
 
         // ResultPtr Initializers
-        let work_id = jobctr.input().id();
+        let work_id = jobctr.work().id();
 
         let mut handles = Vec::new();
 

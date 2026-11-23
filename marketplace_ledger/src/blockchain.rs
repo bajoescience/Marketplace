@@ -9,13 +9,10 @@ use marketplace_primitives::{
 };
 
 use std::{
-    collections::HashMap,
-    panic,
-    path::Path,
-    sync::{Mutex, MutexGuard, RwLock, RwLockReadGuard, RwLockWriteGuard},
+    collections::HashMap, format, panic, path::Path, sync::{Mutex, MutexGuard, RwLock, RwLockReadGuard, RwLockWriteGuard},
 };
 
-use redb::{Database, Error, ReadableDatabase, ReadableTableMetadata, TableDefinition};
+use redb::{Database, ReadableDatabase, ReadableTable, ReadableTableMetadata, TableDefinition};
 
 /// Store all `BlockInfo` directly and address them by their epoch
 ///
@@ -58,17 +55,19 @@ impl<B: Balances> Blockchain<B> {
     /// using the path of the blockchain database file
     /// This is used in the initialization
     /// of the Marketplace State
-    pub fn init(path: impl AsRef<Path>, state: State<B>) -> StdResult<Self> {
+    pub fn init(path: impl AsRef<Path>, mut state: State<B>) -> StdResult<Self> {
         // Initialize blockchain database
         let db = Database::create(path)?;
 
-        Self::init_tables(&db)?;
+        Self::init_tables(&db, &mut state)?;
 
-        Ok(Self {
+        let blockchain = Self {
             db: RwLock::new(db),
             state: Mutex::new(state),
             cache: Mutex::new(HashMap::new()),
-        })
+        };
+
+        Ok(blockchain)
     }
 
     /// Read from blockchain database
@@ -144,6 +143,13 @@ impl<B: Balances> Blockchain<B> {
     // Update state with contracts in a finalized block
     // block passed in must have been confirmed
     pub fn update_state_with_block(&self, block: &Block) -> AgentResult<()> {
+        // Validate block header using previous block header
+        let prev_hdr = self
+            .latest_header()
+            .expect("Latest block Header could not be fetched");
+
+        block.validate(&prev_hdr)?;
+
         for ctr in block.ctrs() {
             // Remove contract from cache
             // Given that all contracts must have been added to cache
@@ -152,25 +158,10 @@ impl<B: Balances> Blockchain<B> {
                 .take_ctr(ctr.id())
                 .expect("Error: Contract not found in cache");
 
-            match ctr {
-                Contract::JOB(jobctr) => {
-                    let tx = jobctr.get_tx()?;
-                    self.state().put_opts(&tx);
-                }
-                Contract::TX(txctr) => {
-                    for tx in txctr.get_txs() {
-                        self.state().put_opts(tx);
-                    }
-                }
-            }
+            self.state().update_state_with_ctr(ctr)?;
         }
 
-        // Validate block header using previous block header
-        let prev_hdr = self
-            .latest_header()
-            .expect("Latest block Header could not be fetched");
-
-        block.validate(&prev_hdr)
+        Ok(())
     }
 
     // Try to take input UTXO's for jobcontracts
@@ -189,35 +180,47 @@ impl<B: Balances> Blockchain<B> {
         for utxo_ref in workptr.ipts() {
             // Ensure utxo exists
             let Some(utxo) = balances.get(*utxo_ref) else {
+                // If utxo does not exist revert state
+                state.revert_jobctr_utxos(ref_opts);
+                
                 return Err(format!(
                     "Error: Tx Output {} not found.",
                     functions::from_bytes(&utxo_ref.id())
                 ));
             };
 
-            match state::confirm_utxo(&utxo, &workptr.id(), auth) {
-                Ok(_) => ref_opts.push((utxo_ref.clone(), utxo)),
-                Err(e) => {
-                    // Revert removed utxos
-                    for (utxo_ref, utxo) in ref_opts {
-                        balances.put(utxo_ref, utxo);
-                    }
-                    return Err(e);
-                }
+            // Add utxo to removed utxos
+            ref_opts.push((utxo_ref.clone(), utxo));
+
+            if let Err(e) = state::confirm_utxo(&utxo, &workptr.id(), auth) {
+                // Revert removed utxos
+                state.revert_jobctr_utxos(ref_opts);
+                return Err(e);
             };
+        }
+
+        // Check sum of ref opts is equal to workptr spent
+        let ipt_sum = ref_opts.iter()
+            .fold(
+                WU::default(), 
+                |acc, (_, opt)| acc + opt.amount()
+            );
+
+        if ipt_sum != workptr.work_size().into() {
+            // Revert removed utxos
+            state.revert_jobctr_utxos(ref_opts);
+            return Err(format!(
+                "Err: Workptr work size is not equal to Tx ipts specified"
+            ))
         }
 
         Ok(ref_opts)
     }
 
-    // Return utxo taken by a job back to state
+    
     pub fn revert_jobctr_utxos(&self, utxos: Vec<(TxOptRef, TxOpt)>) {
         let mut state = self.state();
-        let balances = state.get_mut_coin_balance_list();
-
-        for (utxo_ref, utxo) in utxos.into_iter().rev() {
-            balances.put(utxo_ref, utxo);
-        }
+        state.revert_jobctr_utxos(utxos);
     }
 
     // Subtracts transaction inputs from the global state
@@ -258,7 +261,7 @@ impl<B: Balances> Blockchain<B> {
 // Getter methods for database
 impl<B: Balances> Blockchain<B> {
     // Initialize blockchain database tables
-    pub fn init_tables(db: &Database) -> Result<(), Error> {
+    pub fn init_tables(db: &Database, state: &mut State<B>) -> StdResult<()> {
         // Genesis block
         let genesis = Block::genesis();
 
@@ -280,7 +283,12 @@ impl<B: Balances> Blockchain<B> {
             // If block table is empty,
             // clear other tables and initialize them
             // with genesis block.
-            if blocks.is_empty()? {
+            if indexes.is_empty()? {
+                // If block or metadata is not empty, panic 
+                if !blocks.is_empty()? {
+                    panic!("Error: Corrupt blockchain database")
+                }
+
                 // Add genesis block as metadata and remove
                 // any previous data
                 metadata.insert("genesis", genesis.serialize().as_slice())?;
@@ -293,6 +301,61 @@ impl<B: Balances> Blockchain<B> {
 
                 // Add genesis data to index
                 indexes.insert(0, genesis.id().as_slice())?;
+            } else {
+                // Store prev header to validate next block in loop
+                let genesis = metadata.get("genesis")?.unwrap();
+
+                // TODO: first blockheader must be eual to genesis 
+                let mut prev_header =  *Block::from_bytes(genesis.value())?.header();
+                
+                // Update state with blocks
+                for entry in indexes.iter()? {
+                    let (index, header_id) = entry?;
+
+                    let header_id: ID = header_id.value().try_into()?;
+                    let index = index.value();
+
+                    // Ensure genesis header in metadata matches with first header in index
+                    if index == 0 {
+                        if prev_header.id() != header_id {
+                            panic!("Error Corrupt DB: Genesis header in metadata does not match chain")
+                        }
+
+                        continue;
+                    }
+
+                    // Get block info from blocks which must exist
+                    let blockinfo = blocks.get(index)?
+                        .expect("Error Corrupt DB: Blockinfo not found");
+
+                    let blockinfo = BlockInfo::from_bytes(blockinfo.value())?;
+
+                    // Ensure block info header matches indexes header
+                    let current_header = blockinfo.header().unwrap();
+
+                    if current_header.id() != header_id {
+                        panic!("Error Corrupt DB: Blockinfo block does not match indexes block")
+                    }
+
+                    // Ensure the header matches prev header
+                    if current_header.prev() != prev_header.id() {
+                        panic!("Error Corrupt DB: Invalid block in chain does not reference former")
+                    }
+
+                    // Update state with blockinfo block
+                    if let Some(block) = blockinfo.block() {
+                        // validate block using prev header
+
+                        for ctr in block.ctrs() {
+                            state.update_state_with_ctr(ctr)
+                                .expect("Unable to initialize state")
+                        }
+                    }
+
+                    // The current header after confirmation 
+                    // becomes the new prev header for the next loop iteration
+                    prev_header = current_header
+                }
             }
         }
 
@@ -671,33 +734,54 @@ mod tests {
         Ok(())
     }
 
-    // The same in-memory chain and database should survive reopening.
+    // Publishing a block with outputs should persist its block data and rebuild
+    // the corresponding financial state when the database is reopened.
     #[test]
     fn published_block_persists_across_database_reopen() -> StdResult<()> {
         let path = test_db("persistence");
         let state: State<state::DefaultBalances> = State::new();
         let chain = Blockchain::init(&path, state)?;
-        let block = chain.new_block();
+        let owner = Owner::new_sig();
+        let recipient = Owner::new_sig();
+        let recipient_amount = WU::try_from(30_000u128).unwrap();
+        let owner_amount = WU::GDC() - recipient_amount;
+        let contract = ctr(&owner, &recipient);
+        chain.add_ctrs(vec![contract.clone()]);
+
+        let block = Block::new(
+            &chain.latest_header()?,
+            BlockBody::new(vec![contract.clone()]),
+        );
         let block_id = block.id();
-        chain.add_to_db(blockinfo(block))?;
+        chain.publish_blockinfo(blockinfo(block))?;
 
         assert_eq!(chain.len(), 2);
         let latest = chain.latest_header()?;
         assert!(chain.is_block(&latest)?);
+        assert_eq!(chain.gdc_balance(owner.as_lock()), owner_amount);
+        assert_eq!(chain.gdc_balance(recipient.as_lock()), recipient_amount);
+        assert!(chain.cache().is_empty());
 
         drop(chain);
-        let reopened = Blockchain::init(&path, State::<state::DefaultBalances>::new())?;
+        let reopened = Blockchain::init(&path, State::<state::DefaultBalances>::new())
+            .expect("reopening a persisted block with a transaction should succeed");
 
         assert_eq!(reopened.len(), 2);
         assert_eq!(reopened.latest_header()?.id(), block_id);
+        assert!(reopened.is_block(&reopened.latest_header()?)?);
+        let stored_info = reopened
+            .get_blockinfo_by_index(1)?
+            .expect("published block should be stored at index 1");
+        let stored_block = stored_info
+            .block()
+            .expect("stored block info should contain its block");
+        assert_eq!(stored_block.id(), block_id);
+        assert_eq!(stored_block.ctrs().len(), 1);
+        assert_eq!(stored_block.ctrs()[0].id(), contract.id());
+        assert_eq!(reopened.gdc_balance(owner.as_lock()), owner_amount);
         assert_eq!(
-            reopened
-                .get_blockinfo_by_index(1)?
-                .unwrap()
-                .block()
-                .unwrap()
-                .id(),
-            block_id,
+            reopened.gdc_balance(recipient.as_lock()),
+            recipient_amount
         );
 
         fs::remove_file(path)?;
@@ -768,6 +852,94 @@ mod tests {
         Ok(())
     }
 
+    // A transaction must not be able to create output value larger than the
+    // value of its referenced inputs. This also verifies that a conservation
+    // failure does not silently consume the input UTXO.
+    #[test]
+    fn get_bill_utxos_rejects_inflated_outputs_and_preserves_input() -> StdResult<()> {
+        let path = test_db("bill_inflated_output");
+        let owner = Owner::new_sig();
+        let lock = owner.as_lock();
+        let state: State<state::DefaultBalances> = State::new();
+        let chain = Blockchain::init(&path, state)?;
+        let input_ref = TxOptRef::new([71; 32], 0);
+        let input_amount = WU::try_from(100u128).unwrap();
+        {
+            let mut state = chain.state();
+            state
+                .get_mut_coin_balance_list()
+                .put(input_ref, TxOpt::new(lock, input_amount));
+        }
+
+        let tx = Tx::new(
+            1,
+            TxIdentifier::COIN,
+            Some(vec![input_ref]),
+            Some(vec![TxOpt::new(
+                lock,
+                WU::try_from(250u128).unwrap(),
+            )]),
+        );
+        let bill = Bill::new(vec![tx]);
+        let mut auth = HashMap::new();
+        auth.insert(lock.id(), owner.sign(&bill.id()));
+
+        let err = chain.get_bill_utxos(&bill, &auth).unwrap_err();
+        assert!(err.contains("ipts and opts not equal"));
+        assert_eq!(chain.gdc_balance(lock), input_amount);
+
+        fs::remove_file(path)?;
+        Ok(())
+    }
+
+    // An inflated later transaction must not leave inputs from earlier valid
+    // transactions reserved. All UTXOs consumed before the failure are rolled
+    // back, while the failing transaction's input must also be restored.
+    #[test]
+    fn get_bill_utxos_rolls_back_all_inputs_when_later_output_is_inflated() -> StdResult<()> {
+        let path = test_db("bill_later_inflated_output");
+        let owner = Owner::new_sig();
+        let lock = owner.as_lock();
+        let state: State<state::DefaultBalances> = State::new();
+        let chain = Blockchain::init(&path, state)?;
+        let first_ref = TxOptRef::new([75; 32], 0);
+        let second_ref = TxOptRef::new([76; 32], 0);
+        let first_amount = WU::try_from(100u128).unwrap();
+        let second_amount = WU::try_from(100u128).unwrap();
+        {
+            let mut state = chain.state();
+            let balances = state.get_mut_coin_balance_list();
+            balances.put(first_ref, TxOpt::new(lock, first_amount));
+            balances.put(second_ref, TxOpt::new(lock, second_amount));
+        }
+
+        let valid = Tx::new(
+            1,
+            TxIdentifier::COIN,
+            Some(vec![first_ref]),
+            Some(vec![TxOpt::new(lock, first_amount)]),
+        );
+        let inflated = Tx::new(
+            2,
+            TxIdentifier::COIN,
+            Some(vec![second_ref]),
+            Some(vec![TxOpt::new(
+                lock,
+                WU::try_from(250u128).unwrap(),
+            )]),
+        );
+        let bill = Bill::new(vec![valid, inflated]);
+        let mut auth = HashMap::new();
+        auth.insert(lock.id(), owner.sign(&bill.id()));
+
+        let err = chain.get_bill_utxos(&bill, &auth).unwrap_err();
+        assert!(err.contains("ipts and opts not equal"));
+        assert_eq!(chain.gdc_balance(lock), first_amount + second_amount);
+
+        fs::remove_file(path)?;
+        Ok(())
+    }
+
     // Authentication failure in a later bill transaction must return the error
     // and restore UTXOs already removed for preceding transactions.
     #[test]
@@ -809,7 +981,10 @@ mod tests {
         let err = chain.get_bill_utxos(&bill, &auth).unwrap_err();
         assert!(err.contains("Tx Output"));
         assert_eq!(chain.gdc_balance(lock), first_output.amount());
-        assert_eq!(chain.gdc_balance(unauthenticated_lock), WU::default());
+        assert_eq!(
+            chain.gdc_balance(unauthenticated_lock),
+            second_output.amount()
+        );
 
         fs::remove_file(path)?;
         Ok(())
@@ -876,6 +1051,7 @@ mod tests {
             TxOpt::new(lock, WU::try_from(10_000u128).unwrap()),
             TxOpt::new(unauthenticated_lock, WU::try_from(20_000u128).unwrap()),
         ];
+        
         {
             let mut state = chain.state();
             let balances = state.get_mut_coin_balance_list();
@@ -898,7 +1074,148 @@ mod tests {
         let err = chain.get_workptr_utxos(&work, &auth).unwrap_err();
         assert!(err.contains("Tx Output"));
         assert_eq!(chain.gdc_balance(lock), outputs[0].amount());
-        assert_eq!(chain.gdc_balance(unauthenticated_lock), WU::default());
+        assert_eq!(
+            chain.gdc_balance(unauthenticated_lock),
+            outputs[1].amount()
+        );
+
+        fs::remove_file(path)?;
+        Ok(())
+    }
+
+    // A bad signature on a later Work Pointer input must restore both the
+    // failing UTXO and any earlier authenticated inputs already removed.
+    // Retrying with valid signatures confirms that all inputs remain usable.
+    #[test]
+    fn get_workptr_utxos_restores_all_inputs_on_later_invalid_signature() -> StdResult<()> {
+        let path = test_db("work_later_invalid_signature");
+        let first_owner = Owner::new_sig();
+        let second_owner = Owner::new_sig();
+        let wrong_signer = Owner::new_sig();
+        let first_lock = first_owner.as_lock();
+        let second_lock = second_owner.as_lock();
+        let refs = [TxOptRef::new([45; 32], 0), TxOptRef::new([46; 32], 0)];
+        let amount = WU::try_from(10_000u128).unwrap();
+        let state: State<state::DefaultBalances> = State::new();
+        let chain = Blockchain::init(&path, state)?;
+        {
+            let mut state = chain.state();
+            let balances = state.get_mut_coin_balance_list();
+            balances.put(refs[0], TxOpt::new(first_lock, amount));
+            balances.put(refs[1], TxOpt::new(second_lock, amount));
+        }
+
+        let work = WorkPtr::new(
+            [52; 32],
+            WorkSize::build(amount + amount).unwrap(),
+            refs.to_vec(),
+            first_lock,
+            BlockHeader::genesis(),
+            ExecuteTime::NOW,
+        );
+        let mut invalid_auth = HashMap::new();
+        invalid_auth.insert(first_lock.id(), first_owner.sign(&work.id()));
+        invalid_auth.insert(second_lock.id(), wrong_signer.sign(&work.id()));
+
+        assert!(chain.get_workptr_utxos(&work, &invalid_auth).is_err());
+        assert_eq!(chain.gdc_balance(first_lock), amount);
+        assert_eq!(chain.gdc_balance(second_lock), amount);
+
+        let mut valid_auth = HashMap::new();
+        valid_auth.insert(first_lock.id(), first_owner.sign(&work.id()));
+        valid_auth.insert(second_lock.id(), second_owner.sign(&work.id()));
+        let reserved = chain.get_workptr_utxos(&work, &valid_auth)?;
+
+        assert_eq!(reserved.len(), refs.len());
+        assert_eq!(chain.gdc_balance(first_lock), WU::default());
+        assert_eq!(chain.gdc_balance(second_lock), WU::default());
+
+        fs::remove_file(path)?;
+        Ok(())
+    }
+
+    // The work size requested by a Work Pointer must be backed by the actual
+    // value of all referenced input UTXOs. If it requests more than those
+    // inputs contain, the inputs must be restored rather than consumed.
+    #[test]
+    fn get_workptr_utxos_rejects_unbacked_work_size_and_restores_inputs() -> StdResult<()> {
+        let path = test_db("work_unbacked_size");
+        let owner = Owner::new_sig();
+        let lock = owner.as_lock();
+        let state: State<state::DefaultBalances> = State::new();
+        let chain = Blockchain::init(&path, state)?;
+        let refs = [TxOptRef::new([81; 32], 0), TxOptRef::new([82; 32], 0)];
+        let input_amounts = [
+            WU::try_from(6_000u128).unwrap(),
+            WU::try_from(4_000u128).unwrap(),
+        ];
+        {
+            let mut state = chain.state();
+            let balances = state.get_mut_coin_balance_list();
+            for (reference, amount) in refs.iter().zip(input_amounts.iter()) {
+                balances.put(*reference, TxOpt::new(lock, *amount));
+            }
+        }
+
+        let work = WorkPtr::new(
+            [83; 32],
+            WorkSize::build(WU::try_from(15_000u128).unwrap()).unwrap(),
+            refs.to_vec(),
+            lock,
+            BlockHeader::genesis(),
+            ExecuteTime::NOW,
+        );
+        let mut auth = HashMap::new();
+        auth.insert(lock.id(), owner.sign(&work.id()));
+
+        let err = chain.get_workptr_utxos(&work, &auth).unwrap_err();
+        assert!(err.contains("work size"));
+        assert_eq!(
+            chain.gdc_balance(lock),
+            input_amounts[0] + input_amounts[1],
+        );
+
+        fs::remove_file(path)?;
+        Ok(())
+    }
+
+    // A Work Pointer is valid only when the sum of its authenticated input
+    // UTXOs exactly equals the requested work size. On success, all inputs
+    // are reserved and removed from the visible coin balance.
+    #[test]
+    fn get_workptr_utxos_accepts_exact_input_sum() -> StdResult<()> {
+        let path = test_db("work_exact_sum");
+        let owner = Owner::new_sig();
+        let lock = owner.as_lock();
+        let state: State<state::DefaultBalances> = State::new();
+        let chain = Blockchain::init(&path, state)?;
+        let refs = [TxOptRef::new([91; 32], 0), TxOptRef::new([92; 32], 0)];
+        let input_amounts = [
+            WU::try_from(6_000u128).unwrap(),
+            WU::try_from(4_000u128).unwrap(),
+        ];
+        {
+            let mut state = chain.state();
+            let balances = state.get_mut_coin_balance_list();
+            for (reference, amount) in refs.iter().zip(input_amounts.iter()) {
+                balances.put(*reference, TxOpt::new(lock, *amount));
+            }
+        }
+
+        let work = WorkPtr::new(
+            [93; 32],
+            WorkSize::build(WU::try_from(10_000u128).unwrap()).unwrap(),
+            refs.to_vec(),
+            lock,
+            BlockHeader::genesis(),
+            ExecuteTime::NOW,
+        );
+        let mut auth = HashMap::new();
+        auth.insert(lock.id(), owner.sign(&work.id()));
+
+        let removed = chain.get_workptr_utxos(&work, &auth)?;
+        assert_eq!(removed.len(), refs.len());
+        assert_eq!(chain.gdc_balance(lock), WU::default());
 
         fs::remove_file(path)?;
         Ok(())

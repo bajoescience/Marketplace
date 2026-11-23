@@ -121,9 +121,9 @@ impl Tx {
     /// to the job owner after the Tx instance has been created
     pub fn from_contract(ver: u32, ctr: &JobContract) -> AgentResult<Self> {
         // Employer input represented by TxOptRef
-        let ipts = ctr.input().ipts().clone();
+        let ipts = ctr.work().ipts().clone();
 
-        let work_size = ctr.input().work_size();
+        let work_size = ctr.work().work_size();
 
         // Outputs
         // Only winning whiteroom members receive the pay
@@ -137,7 +137,7 @@ impl Tx {
         // If spent is less than work size, send remainder back
         if spent < work_size {
             opts.push(TxOpt::new(
-                ctr.input().remainder(),
+                ctr.work().remainder(),
                 work_size.into() - spent.into(),
             ));
         }

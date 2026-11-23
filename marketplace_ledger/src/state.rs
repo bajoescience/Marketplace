@@ -10,7 +10,7 @@ use marketplace_helpers::{
     functions,
     objects::{AgentResult, ID, IdHash, WU},
 };
-use marketplace_primitives::par_exec::{Tx, TxIdentifier, TxOpt, TxOptRef};
+use marketplace_primitives::par_exec::{Contract, Tx, TxIdentifier, TxOpt, TxOptRef};
 use marketplace_wallet::{Key, Lock};
 
 // Helper function confirming utxo ownership
@@ -201,10 +201,29 @@ impl<B: Balances> State<B> {
                 ));
             };
 
-            // Confirm output is signed by owner
-            confirm_utxo(&opt, msg_id, auth)?;
-
             ref_opts.push((*ipt, opt));
+
+            // Confirm output is signed by owner
+            if let Err(e) = confirm_utxo(&opt, msg_id, auth) {
+                revert_utxo(ref_opts, balances);
+                return Err(e);
+            };
+        }
+
+        // Check if sum of tx ipts and opts is equal
+        let ipt_sum = ref_opts.iter()
+            .fold(
+                WU::default(), 
+                |acc, (_, opt)| acc + opt.amount()
+            );
+
+        // If ipts is not eual to opts, revert and return err
+        if ipt_sum != tx.opt_sum() {
+            revert_utxo(ref_opts, balances);
+
+            return Err(format!(
+                "Err: Tx ipts and opts not equal"
+            ));
         }
 
         Ok(ref_opts)
@@ -225,6 +244,15 @@ impl<B: Balances> State<B> {
         }
     }
 
+    pub fn revert_jobctr_utxos(&mut self, utxos: Vec<(TxOptRef, TxOpt)>) {
+        let balances = self.get_mut_coin_balance_list();
+
+        // Return utxo taken by a job back to state
+        for (utxo_ref, utxo) in utxos.into_iter().rev() {
+            balances.put(utxo_ref, utxo);
+        }
+    }
+
     // Add utxo to state
     pub fn put_opts(&mut self, tx: &Tx) {
         let balances = self
@@ -236,6 +264,23 @@ impl<B: Balances> State<B> {
             let ipt = TxOptRef::new(tx.id(), index);
             balances.put(ipt, utxo.clone());
         }
+    }
+
+    // Update state with ctr
+    pub fn update_state_with_ctr(&mut self, ctr: &Contract) -> AgentResult<()> {
+        match ctr {
+            Contract::JOB(jobctr) => {
+                let tx = jobctr.get_tx()?;
+                self.put_opts(&tx);
+            }
+            Contract::TX(txctr) => {
+                for tx in txctr.get_txs() {
+                    self.put_opts(tx);
+                }
+            }
+        }
+
+        Ok(())
     }
 }
 
@@ -336,6 +381,56 @@ mod tests {
 
         state.revert_ref_opts(&tx, removed);
         assert_eq!(state.get_gdc_balance(lock), output.amount());
+        Ok(())
+    }
+
+    // If a later input has an invalid signature, get_ref_opts must restore
+    // both that input and any earlier inputs it already removed. A subsequent
+    // attempt with valid signatures confirms that neither UTXO was lost.
+    #[test]
+    fn invalid_later_input_signature_restores_all_transaction_utxos() -> AgentResult<()> {
+        let first_owner = Owner::new_sig();
+        let second_owner = Owner::new_sig();
+        let wrong_signer = Owner::new_sig();
+        let first_lock = first_owner.as_lock();
+        let second_lock = second_owner.as_lock();
+        let refs = [TxOptRef::new([5; 32], 0), TxOptRef::new([6; 32], 0)];
+        let amounts = [
+            WU::try_from(12_000).unwrap(),
+            WU::try_from(13_000).unwrap(),
+        ];
+        let tx = Tx::new(
+            1,
+            TxIdentifier::COIN,
+            Some(refs.to_vec()),
+            Some(vec![TxOpt::new(first_lock, amounts[0] + amounts[1])]),
+        );
+        let mut state = State::<DefaultBalances>::new();
+        {
+            let balances = state.get_mut_coin_balance_list();
+            for ((reference, amount), owner) in refs.iter().zip(amounts.iter()).zip(
+                [&first_owner, &second_owner].iter(),
+            ) {
+                balances.put(*reference, TxOpt::new(owner.as_lock(), *amount));
+            }
+        }
+
+        let mut invalid_auth = HashMap::new();
+        invalid_auth.insert(first_lock.id(), first_owner.sign(&tx.id()));
+        invalid_auth.insert(second_lock.id(), wrong_signer.sign(&tx.id()));
+
+        assert!(state.get_ref_opts(&tx, &tx.id(), &invalid_auth).is_err());
+        assert_eq!(state.get_gdc_balance(first_lock), amounts[0]);
+        assert_eq!(state.get_gdc_balance(second_lock), amounts[1]);
+
+        let mut valid_auth = HashMap::new();
+        valid_auth.insert(first_lock.id(), first_owner.sign(&tx.id()));
+        valid_auth.insert(second_lock.id(), second_owner.sign(&tx.id()));
+        let reserved = state.get_ref_opts(&tx, &tx.id(), &valid_auth)?;
+
+        assert_eq!(reserved.len(), refs.len());
+        assert_eq!(state.get_gdc_balance(first_lock), WU::default());
+        assert_eq!(state.get_gdc_balance(second_lock), WU::default());
         Ok(())
     }
 

@@ -151,13 +151,13 @@ where
             return Err(format!("Error: Whiteroom is already full"));
         }
 
-        // Increase whiteroom member vote's count
-        *self.votes.entry(member.as_vote()).or_insert(0) += member.votes();
-
         // Ensure no duplicates
         if self.list.contains(&member) {
             return Err(format!("Error: Duplicate Whiterooom Member"));
         }
+
+        // Increase whiteroom member vote's count
+        *self.votes.entry(member.as_vote()).or_insert(0) += member.votes();
 
         self.list.push(member);
         Ok(self.len())

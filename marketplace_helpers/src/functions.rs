@@ -5,7 +5,8 @@ use time::OffsetDateTime;
 
 use crate::objects::{CONTRACT_WHITEROOM_SIZE, ID, MIN_WORK_SIZE, VDF_CONSTANT, VRF_T, WU};
 use alloy_primitives::{U256, U512};
-use rug::Rational;
+use num_rational::Ratio;
+use num_traits::ToPrimitive;
 
 /// BFT whiteroom size given f amounts of tolerable faulty nodes
 pub const fn bft_from(f: usize) -> usize {
@@ -187,9 +188,13 @@ pub fn timestamp() -> u64 {
 /// Probability of voters chosen
 /// is given by  p = expected_users / total_currency
 pub fn voter_probability(users: u128, total_currency: WU) -> f64 {
-    let rational = Rational::from(users / total_currency.inner());
+    if total_currency == WU::default() {
+        return 0.0;
+    }
 
-    rational.to_f64()
+    let rational = Ratio::new(users, total_currency.inner());
+
+    rational.to_f64().unwrap_or(0.0).clamp(0.0, 1.0)
 }
 
 /// Hash constant given by
@@ -224,6 +229,36 @@ mod tests {
         let new_vrf = get_vrf(avg_wr_size, old_vrf);
 
         assert_eq!(new_vrf, [204; 32]);
+    }
+
+     #[test]
+    fn probability_is_nonzero_for_realistic_supply() {
+        // 25 expected voters, 1 trillion WU total supply
+        let total = WU::try_from(1_000_000_000_000u128).unwrap();
+        let p = voter_probability(25, total);
+
+        assert!(p > 0.0, "probability must not truncate to zero");
+        assert!((p - 2.5e-11).abs() < 1e-20);
+    }
+
+    #[test]
+    fn probability_scales_with_users() {
+        let total = WU::try_from(1_000_000_000_000u128).unwrap();
+        let p1 = voter_probability(25, total);
+        let p2 = voter_probability(50, total);
+
+        assert!((p2 / p1 - 2.0).abs() < 1e-9);
+    }
+
+    #[test]
+    fn probability_is_one_when_users_equal_supply() {
+        let total = WU::try_from(25u128).unwrap();
+        assert_eq!(voter_probability(25, total), 1.0);
+    }
+
+    #[test]
+    fn probability_handles_zero_supply() {
+        assert_eq!(voter_probability(25, WU::default()), 0.0);
     }
 
     // Test VRF threshhold cannot overflow max 26 bit number
